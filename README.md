@@ -1,4 +1,4 @@
-# 🌳 Create Complete Language (Создание полного языка)
+# Create Complete Language (Создание полного языка)
 
 **The Tree of Knowledge** is a research project that detects and fills **semantic gaps**—missing or unevenly distributed concepts—in human languages using **semantic graphs** built from interpretable vector spaces (e.g., truncated **SVD/LSA**).  
 Primary focus language: **Marathi (मराठी)**, with cross-lingual comparison to a base language.
