@@ -5,10 +5,9 @@ import json
 import re
 import unicodedata
 from typing import Iterable, Iterator, Union
-
 import zstandard as zstd
 
-from .schemas import DocRaw, DocTok
+from .schemas import DocRaw, DocTok, BaseModel
 
 
 def _open_text_read(path: str):
@@ -31,7 +30,7 @@ def _open_text_write(path: str):
     return open(path, "w", encoding="utf-8")
 
 
-def iter_docs(path: str) -> Iterator[Union[DocRaw, DocTok]]:
+def iter_docs(path: str) -> Iterator[BaseModel]:
     """Stream validated DocRaw/DocTok objects from .jsonl or .jsonl.zst."""
     with _open_text_read(path) as f:
         for line in f:
@@ -45,7 +44,7 @@ def iter_docs(path: str) -> Iterator[Union[DocRaw, DocTok]]:
                 yield DocRaw.model_validate(obj)
 
 
-def write_docs(path: str, docs: Iterable[Union[DocRaw, DocTok]]) -> None:
+def write_docs(path: str, docs: Iterable[BaseModel]) -> None:
     """Write validated DocRaw/DocTok to .jsonl or .jsonl.zst (one JSON per line)."""
     with _open_text_write(path) as f:
         for d in docs:

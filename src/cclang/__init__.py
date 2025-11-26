@@ -15,4 +15,4 @@ Public entrypoints are intentionally small; use subpackages:
 - cclang.morph   : (stubs) intra-lingual morphology candidates
 - cclang.eval    : (stubs) evaluation/reporting
 """
-__all__ = ["io", "text", "parser"]
+__all__ = ["io", "text", "parser", "common", "ingest"]

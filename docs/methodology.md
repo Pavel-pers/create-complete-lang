@@ -39,6 +39,6 @@ This project (**CreateCompleteLang**) aims to **detect** and **fill** semantic g
 
 ## Next steps
 
-- Plug real tokenizers and language-specific normalization.
+- Plug real tokenizers and  language-specific normalization.
 - Implement gap detectors and alignment.
 - Add ANN search for large vocabularies (FAISS/ScaNN).
