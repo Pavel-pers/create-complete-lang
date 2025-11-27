@@ -1,3 +1,4 @@
+# get connection and ensure schemas for databases
 import sqlite3
 from pathlib import Path
 
