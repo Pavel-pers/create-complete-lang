@@ -15,6 +15,28 @@ class FetchedItem(BaseModel):
     local_path: str
     ts: str = Field(default_factory= lambda: datetime.now().isoformat() + 'Z')
 
+class ProcessingStatus(str, Enum):
+    OK = "ok"
+    ERROR = "error"
+
+class PdfState(BaseModel):
+    pdf_sha: str
+    pdf_path: str
+
+    text_sha: Optional[str] = None
+    text_path: Optional[str] = None
+    text_status: Optional[ProcessingStatus] = None
+    text_updated_at: Optional[str] = None
+
+    lemma_sha: Optional[str] = None
+    lemma_path: Optional[str] = None
+    lemma_status: Optional[ProcessingStatus] = None
+    lemma_updated_at: Optional[str] = None
+
+    PROCESSING_STATUS_OK: ClassVar[ProcessingStatus] = ProcessingStatus.OK
+    PROCESSING_STATUS_ERROR: ClassVar[ProcessingStatus] = ProcessingStatus.ERROR
+
+
 # ---------- Manifest --------
 
 class FetchSatus(str, Enum):
