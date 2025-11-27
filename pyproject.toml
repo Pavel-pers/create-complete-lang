@@ -1,13 +1,15 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "createcompletelang"
 version = "0.1.0"
 description = "CreateCompleteLang: interpretable semantic-graph framework to detect and fill semantic gaps intra- and cross-lingually (Marathi-focused)."
 readme = "README.md"
 requires-python = ">=3.12"
-
 authors = [{ name = "ppers" }]
 keywords = ["semantic gaps", "SVD", "LSA", "semantic graph", "cross-lingual", "marathi", "NLP"]
-
 dependencies = [
   "numpy>=1.26",
   "scipy>=1.11",
@@ -32,29 +34,16 @@ dev = [
   "jupyter>=1.0",
 ]
 cpp = [
-  "pybind11>=2.12"
+  "pybind11>=2.12",
 ]
 docs = [
   "mkdocs>=1.6",
-  "mkdocs-material>=9.5"
+  "mkdocs-material>=9.5",
 ]
 
-# CLI-команды для этапов пайплайна
 [project.scripts]
-cclang-parse-corpus = "pipelines.parse_corpus:main"
-cclang-build-cooc = "pipelines.build_cooc:main"
-cclang-run-svd = "pipelines.run_svd:main"
-cclang-build-graph = "pipelines.build_semantic_graph:main"
-cclang-find-gaps = "pipelines.find_gaps:main"
-cclang-align = "pipelines.align_crosslingual:main"
-cclang-find-iso = "pipelines.find_isomorphisms:main"
-cclang-fill-cross = "pipelines.fill_crosslingual:main"
-cclang-fill-intra = "pipelines.fill_intralingual:main"
-cclang-report = "pipelines.generate_report:main"
-
-[build-system]
-requires = ["setuptools>=70", "wheel"]
-build-backend = "setuptools.build_meta"
+cclang-discover-links = "pipelines.corpus.discover_links:main"
+cclang-fetch-pdfs = "pipelines.corpus.fetch_pdfs:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
