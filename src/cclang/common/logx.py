@@ -10,6 +10,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 # --- Вспомогательное ---------------------------------------------------------
@@ -59,7 +60,7 @@ class JsonFormatter(logging.Formatter):
         for k, v in record.__dict__.items():
             if k not in _LOG_RECORD_DEFAULT_ATTRS and not k.startswith("_"):
                 data[k] = v
-        return json.dumps(data, ensure_ascii=False, indent=self._indent)
+        return json.dumps(data, ensure_ascii=False, indent=self._indent, default=str)
 
 
 class ConsoleFormatter(logging.Formatter):
@@ -200,6 +201,7 @@ def setup_logging(
 
     # Файл (если указан)
     if log_file:
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
         fh = RotatingFileHandler(log_file, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8")
         fh.setLevel(level_no)
         fh.addFilter(ctx_filter)
