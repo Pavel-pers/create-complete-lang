@@ -7,7 +7,11 @@ T = TypeVar('T')
 class TaskQueue(Queue[T]):
     def __init__(self, logger: logging.Logger | logging.LoggerAdapter, log_period: int = 60):
         super().__init__()
-        if logger.level <= logging.INFO:
+        # Support LoggerAdapter/BoundLogger that may not expose .level
+        level = getattr(logger, "level", None)
+        if level is None and hasattr(logger, "logger"):
+            level = getattr(getattr(logger, "logger"), "level", None)
+        if level is not None and level <= logging.INFO:
             self.logger = logger
             self.log_period = log_period
             self.finish_event = threading.Event()
@@ -25,4 +29,3 @@ class TaskQueue(Queue[T]):
         if hasattr(self, 'logger'):
             self.finish_event.set()
             self.log_thread.join(timeout=5)
-
