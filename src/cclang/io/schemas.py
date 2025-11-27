@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import ClassVar, Dict, List, Optional
 from enum import Enum
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -33,13 +33,14 @@ class FetchManifestRecord(BaseModel):
     error: Optional[str] = None
     ts: str = Field(default_factory= lambda: datetime.now().isoformat() + 'Z')
 
-    STATUS_OK = FetchSatus.OK
-    STATUS_ERROR = FetchSatus.ERROR
-    STATUS_SKIPPED = FetchSatus.SKIPPED
+    STATUS_OK: ClassVar[FetchSatus] = FetchSatus.OK
+    STATUS_ERROR: ClassVar[FetchSatus] = FetchSatus.ERROR
+    STATUS_SKIPPED: ClassVar[FetchSatus] = FetchSatus.SKIPPED
 
     @property
     def id(self):
-        return self.sha
+        # Fallback to URL when sha is unknown (errors)
+        return self.sha or str(self.url)
 
 # ---------- Corpus ----------
 
