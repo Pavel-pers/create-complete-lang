@@ -6,13 +6,15 @@ from pydantic import BaseModel
 
 ManifestRecord = TypeVar("ManifestRecord")
 class ManifestStore(Generic[ManifestRecord]):
-    def __init__(self, manifest_path: Path, model_class: Type[BaseModel]):
+    def __init__(self, manifest_path: Path, model_class: Type[BaseModel], flush_every: int = 1):
         self._manifest_path: Path = manifest_path
         self._manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
         self._items: dict = {}
-        self._lock = threading.Lock()
+        # RLock нужен, потому что mark() может вызвать flush() под тем же локом
+        self._lock = threading.RLock()
         self._buffer: list[ManifestRecord] = []
+        self._flush_every = max(1, flush_every)
         self._load_data(model_class)
 
     def _load_data(self, cls: Type[BaseModel]):
@@ -33,14 +35,15 @@ class ManifestStore(Generic[ManifestRecord]):
         with self._lock:
             with open(self._manifest_path, "a", encoding='utf-8') as f:
                 for record in self._buffer:
-                    f.write(json.dumps(record.model_dump(), ensure_ascii=False) + "\n")
+                    payload = record.model_dump(mode="json")
+                    f.write(json.dumps(payload, ensure_ascii=False) + "\n")
             self._buffer.clear()
 
     def mark(self, record: ManifestRecord):
         with self._lock:
             self._items[record.id] = record
             self._buffer.append(record)
-            if len(self._buffer) > 100:
+            if len(self._buffer) >= self._flush_every:
                 self.flush()
 
     def items(self):
@@ -55,5 +58,3 @@ class ManifestStore(Generic[ManifestRecord]):
         except Exception: # noqa BLE:001
             # \--(:/)--/
             pass
-
-
