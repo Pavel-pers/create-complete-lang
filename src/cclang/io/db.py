@@ -25,21 +25,28 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_fetch_items_sha256 ON fetch_items (sha256);
         CREATE TABLE IF NOT EXISTS pdf_state
         (
-            pdf_sha          TEXT PRIMARY KEY,
-            pdf_path         TEXT NOT NULL,
+            pdf_sha             TEXT PRIMARY KEY,
+            pdf_path            TEXT NOT NULL,
 
-            text_sha         TEXT,
-            text_path        TEXT,
-            text_status      TEXT,
-            text_updated_at  TEXT,
+            text_sha            TEXT,
+            text_path           TEXT,
+            text_status         TEXT,
+            text_updated_at     TEXT,
 
-            lemma_sha        TEXT,
-            lemma_path       TEXT,
-            lemma_status     TEXT,
-            lemma_updated_at TEXT
+            tokenize_sha        TEXT,
+            tokenize_path       TEXT,
+            tokenize_status     TEXT,
+            tokenize_updated_at TEXT,
+
+            lemma_sha           TEXT,
+            lemma_path          TEXT,
+            lemma_status        TEXT,
+            lemma_updated_at    TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_pdf_state_text_sha ON pdf_state (text_sha);
-        CREATE INDEX IF NOT EXISTS idx_pdf_state_text_status ON pdf_state (text_status);  
+        CREATE INDEX IF NOT EXISTS idx_pdf_state_text_status ON pdf_state (text_status);
+        CREATE INDEX IF NOT EXISTS idx_pdf_state_tokenize_sha ON pdf_state (tokenize_sha);
+        CREATE INDEX IF NOT EXISTS idx_pdf_state_tokenize_status ON pdf_state (tokenize_status);
         CREATE INDEX IF NOT EXISTS idx_pdf_state_lemma_sha ON pdf_state (lemma_sha);
         CREATE INDEX IF NOT EXISTS idx_pdf_state_lemma_status ON pdf_state (lemma_status);
         """)
