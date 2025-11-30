@@ -1,4 +1,4 @@
-# cclang/io/upload_local_to_s3.py
+"""CLI to upload local data directories to S3/Yandex Object Storage with optional concurrency."""
 
 from __future__ import annotations
 
@@ -35,10 +35,10 @@ DEFAULT_SUBDIRS: tuple[str, ...] = ("raw_pdfs", "corpora", "artifacts")
 
 def _resolve_data_path(cli_value: str | None) -> Path:
     """
-    Определяем корень локальных данных:
-    1) --data-path, если указан
-    2) env CCLANG_DATA_DIR, если есть
-    3) <repo_root>/data по умолчанию
+    Resolve the local data root:
+    1) --data-path if provided
+    2) env CCLANG_DATA_DIR if set
+    3) fail fast if neither is set
     """
     if cli_value:
         return Path(cli_value).expanduser().resolve()
@@ -51,6 +51,7 @@ def _resolve_data_path(cli_value: str | None) -> Path:
 
 
 def _build_s3_config_from_env_and_args(args: argparse.Namespace) -> S3Config:
+    """Merge CLI args with environment to build S3Config, fail fast on missing required fields."""
     config = load_s3_config()
     logger.info("S3 config: %s", config)
 
@@ -84,6 +85,7 @@ def _build_s3_config_from_env_and_args(args: argparse.Namespace) -> S3Config:
 
 
 def _build_file_manager(args: argparse.Namespace) -> tuple[FileManager, Path]:
+    """Construct FileManager with local and cloud configuration."""
     data_path = _resolve_data_path(args.data_path)
     data_path.mkdir(parents=True, exist_ok=True)
 
@@ -102,7 +104,7 @@ def _build_file_manager(args: argparse.Namespace) -> tuple[FileManager, Path]:
 
     cloud_cfg = CloudConfig(
         enable=True,
-        base_path=Path(args.remote_base),  # префикс внутри root_prefix в бакете, например "data"
+        base_path=Path(args.remote_base),  # prefix inside root_prefix in bucket, e.g. "data"
         s3_config=s3_cfg,
         max_upload_threads=upload_threads,
         max_pool_connections=max_pool_connections,
@@ -113,6 +115,7 @@ def _build_file_manager(args: argparse.Namespace) -> tuple[FileManager, Path]:
 
 
 def _iter_files(base: Path, subdirs: Sequence[str]) -> Iterable[Path]:
+    """Yield all files under the given subdirectories."""
     for sub in subdirs:
         root = base / sub
         if not root.exists():
@@ -134,7 +137,7 @@ def _upload_one(
         skip_existing: bool,
 ) -> None:
     """
-    Загрузить один файл в S3, сохраняя структуру относительно data_path.
+    Upload a single file to S3, preserving the path relative to data_path.
     """
     relative = local_path.relative_to(data_path)
 
@@ -155,30 +158,31 @@ def _upload_one(
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    """Entry point for upload-local-to-s3 CLI."""
     parser = argparse.ArgumentParser(
         description="Upload local data/ subdirectories to S3 (Yandex Object Storage)."
     )
     parser.add_argument(
         "--data-path",
         type=str,
-        help="Локальный корень данных (по умолчанию: CCLANG_DATA_DIR или <repo_root>/data)",
+        help="Local data root (default: CCLANG_DATA_DIR)",
     )
     parser.add_argument(
         "--remote-base",
         type=str,
         default="data",
-        help="Префикс внутри S3 (относительно root_prefix), по умолчанию 'data'",
+        help="Prefix inside S3 (relative to root_prefix), default 'data'",
     )
     parser.add_argument(
         "--upload-threads",
         type=int,
         default=16,
-        help="Количество потоков для загрузки (0 — синхронно, по умолчанию 16)",
+        help="Number of upload threads (0 — synchronous, default 16)",
     )
     parser.add_argument(
         "--s3-max-pool-connections",
         type=int,
-        help="Явно задать max_pool_connections для boto3; по умолчанию 2 на поток, минимум 32",
+        help="Explicit max_pool_connections for boto3; by default 4 per thread, minimum 32",
     )
 
     parser.add_argument(
@@ -186,29 +190,29 @@ def main(argv: Sequence[str] | None = None) -> None:
         dest="dirs",
         action="append",
         help=(
-            "Какие поддиректории внутри data/ заливать. "
-            "Можно указать несколько раз. По умолчанию: raw_pdfs, corpora, artifacts."
+            "Which data/ subdirectories to upload. "
+            "Can be provided multiple times. Default: raw_pdfs, corpora, artifacts."
         ),
     )
 
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Ничего не загружать, только выводить, что бы было сделано",
+        help="Do not upload anything, only print what would be done",
     )
     parser.add_argument(
         "--no-skip-existing",
         action="store_true",
-        help="По умолчанию существующие в S3 объекты пропускаются. "
-             "Укажи этот флаг, чтобы перезаписывать всё.",
+        help="Existing objects in S3 are skipped by default. "
+             "Set this flag to overwrite everything.",
     )
 
-    # S3 / Yandex Object Storage параметры
-    parser.add_argument("--bucket", type=str, help="S3 bucket (или env CCLANG_S3_BUCKET)")
-    parser.add_argument("--region", type=str, help="S3 region (или env CCLANG_S3_REGION, по умолчанию ru-central1)")
-    parser.add_argument("--access-key", type=str, help="S3 access key (или env CCLANG_S3_ACCESS_KEY)")
-    parser.add_argument("--secret-key", type=str, help="S3 secret key (или env CCLANG_S3_SECRET_KEY)")
-    parser.add_argument("--root-prefix", type=str, help="Корневой префикс в бакете (или env CCLANG_S3_ROOT_PREFIX)")
+    # S3 / Yandex Object Storage parameters
+    parser.add_argument("--bucket", type=str, help="S3 bucket (or env CCLANG_S3_BUCKET)")
+    parser.add_argument("--region", type=str, help="S3 region (or env AWS_REGION, default ru-central1)")
+    parser.add_argument("--access-key", type=str, help="S3 access key (or env AWS_ACCESS_KEY_ID)")
+    parser.add_argument("--secret-key", type=str, help="S3 secret key (or env AWS_SECRET_ACCESS_KEY)")
+    parser.add_argument("--root-prefix", type=str, help="Root prefix in bucket (or env CCLANG_S3_ROOT_PREFIX)")
     parser.add_argument('--log-level', choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO",
                             required=False, help='level of logging')
 

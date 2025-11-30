@@ -1,3 +1,4 @@
+"""Thread-safe append-only manifest writer/reader for pipeline outputs."""
 import threading
 from pathlib import Path
 from typing import TypeVar, Generic, Type
@@ -6,12 +7,13 @@ from pydantic import BaseModel
 
 ManifestRecord = TypeVar("ManifestRecord")
 class ManifestStore(Generic[ManifestRecord]):
+    """Append-only JSONL manifest storage with in-memory index."""
     def __init__(self, manifest_path: Path, model_class: Type[BaseModel], flush_every: int = 1):
         self._manifest_path: Path = manifest_path
         self._manifest_path.parent.mkdir(parents=True, exist_ok=True)
 
         self._items: dict = {}
-        # RLock нужен, потому что mark() может вызвать flush() под тем же локом
+        # RLock is required because mark() may call flush() under the same lock
         self._lock = threading.RLock()
         self._buffer: list[ManifestRecord] = []
         self._flush_every = max(1, flush_every)
@@ -29,6 +31,7 @@ class ManifestStore(Generic[ManifestRecord]):
                 self._items[record.id] = record
 
     def flush(self):
+        """Append buffered records to disk."""
         if not self._buffer:
             return
 
@@ -40,6 +43,7 @@ class ManifestStore(Generic[ManifestRecord]):
             self._buffer.clear()
 
     def mark(self, record: ManifestRecord):
+        """Add record to buffer and flush based on flush_every."""
         with self._lock:
             self._items[record.id] = record
             self._buffer.append(record)

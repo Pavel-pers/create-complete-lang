@@ -1,3 +1,4 @@
+"""Queue with optional periodic logging of remaining tasks for worker pipelines."""
 import logging
 import threading
 from queue import Queue
@@ -5,6 +6,7 @@ from typing import TypeVar
 
 T = TypeVar('T')
 class TaskQueue(Queue[T]):
+    """Queue that periodically logs remaining tasks when logger level allows."""
     def __init__(self, logger: logging.Logger | logging.LoggerAdapter, log_period: int = 60):
         super().__init__()
         # Support LoggerAdapter/BoundLogger that may not expose .level
@@ -26,6 +28,7 @@ class TaskQueue(Queue[T]):
             self.logger.info("Remaining tasks: %d", self.unfinished_tasks)
 
     def stop_logging(self):
+        """Stop periodic logging thread."""
         if hasattr(self, 'logger'):
             self.finish_event.set()
             self.log_thread.join(timeout=5)

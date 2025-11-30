@@ -1,4 +1,4 @@
-# Create Complete Language (Создание полного языка)
+# Create Complete Language
 
 **The Tree of Knowledge** is a research project that detects and fills **semantic gaps**—missing or unevenly distributed concepts—in human languages using **semantic graphs** built from interpretable vector spaces (e.g., truncated **SVD/LSA**).  
 Primary focus language: **Marathi (मराठी)**, with cross-lingual comparison to a base language.
@@ -32,3 +32,13 @@ We prefer **interpretable** factor models (SVD/LSA) over opaque embeddings to tr
    - _Cross-lingual_: align spaces with a small seed dictionary (linear/orthogonal mapping), search isomorphic subgraphs, import missing node candidates.  
    - _Intra-lingual_: analogy patterns, paradigm completion, morphology-based candidates.  
 7. **Human Validation**: expert/annotator review loop.
+
+---
+
+## Functional map
+
+- Core utilities: logging (`cclang.common.logx`), S3 config (`cclang.config.s3`), file manager (`cclang.ingest.fs`), S3 store (`cclang.io.cloud`), manifests (`cclang.io.manifest`), fetched-items registry (`cclang.io.fetched_items_store`), network ingest (`cclang.ingest.net`), task queue logging (`cclang.models.tasks_queue`).
+- Pipelines: discover links (`pipelines.corpus.discover_links` → `cclang-discover-links`), fetch PDFs (`pipelines.corpus.fetch_pdfs` → `cclang-fetch-pdfs`).
+- Utility script: upload local data to S3 (`scripts.upload_local_to_s3` → `upload-local-to-s3`).
+
+See `docs/functional_overview.md` for a concise guide to configuration, data layout, and CLI examples.

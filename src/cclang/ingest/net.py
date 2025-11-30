@@ -1,3 +1,4 @@
+"""Network helpers for downloading files to temp storage with hashing and cleanup."""
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,7 @@ net_logger = logx.get_logger("cclang.net")
 
 @dataclass
 class DownloadResult:
+    """Container for download metadata and temporary file reference."""
     status: int
     size_bytes: int
     tmp_file: Optional[Path]
