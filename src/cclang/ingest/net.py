@@ -21,12 +21,17 @@ class DownloadResult:
     error: Optional[str] = None
 
 
-def download_file_to_temp(url: str, download_folder: Path | str = Path("data/temp/downloads")) -> DownloadResult:
+def download_file_to_temp(
+    url: str,
+    fm: fs.FileManager | None,
+    download_folder: Path | str = Path("data/temp/downloads"),
+) -> DownloadResult:
     """
     Download file to a temp location and return metadata. Cleans up temp file on errors.
+    If `fm` is provided, temp files are created via FileManager.
     """
     log = net_logger.bind(url=url)
-    temp_dist = fs.create_temp_file(download_folder, ".part")
+    temp_dist = fm.create_temp_file(".part") if fm is not None else fs.create_temp_file(download_folder, ".part")
 
     result: DownloadResult | None = None
     keep_file = False

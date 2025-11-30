@@ -21,7 +21,8 @@ dependencies = [
     "pydantic>=2.6",
     "zstandard>=0.22",
     "matplotlib>=3.8",
-    "pytesseract>=0.3.13"
+    "pytesseract>=0.3.13",
+    "boto3>=1.34"
 ]
 
 [project.optional-dependencies]
@@ -46,6 +47,7 @@ docs = [
 cclang-discover-links = "pipelines.corpus.discover_links:main"
 cclang-fetch-pdfs = "pipelines.corpus.fetch_pdfs:main"
 cclang-extract_text = "pipelines.corpus.extract_text:main"
+upload-local-to-s3 = "scripts.upload_local_to_s3:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
