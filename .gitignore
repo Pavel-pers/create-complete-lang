@@ -4,3 +4,6 @@ data/
 .DS_Store
 __pycache__
 *.egg-info
+.env
+*.env
+.envrc
