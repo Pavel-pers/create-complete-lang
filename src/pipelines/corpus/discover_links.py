@@ -1,3 +1,4 @@
+"""Pipeline that scrapes epustakalay book links and writes them as SourcePDF records."""
 import argparse
 from typing import Iterable
 
@@ -11,6 +12,7 @@ from cclang.io.corpora import write_docs
 import sys
 
 def run_pipeline(file_path: str, limit: int | None, log: BoundLogger) -> int:
+    """Scrape epustakalay links and write them as SourcePDF records to file_path."""
     log.info("pipeline started")
     try:
         book_list = parse_book_list(page_from=1, page_to=89, limit=limit)
@@ -34,7 +36,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     arg_parser.add_argument("-limit", default=None, type=int)
     arg_parser.add_argument("--log-format", choices=["console", "json"], default="console")
     arg_parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO")
-    arg_parser.add_argument("--log-file", default=None, help="Файл для записи логов (JSONL)")
+    arg_parser.add_argument("--log-file", default=None, help="Log file path (JSONL)")
     args = arg_parser.parse_args(argv)
 
     setup_logging(

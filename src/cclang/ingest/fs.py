@@ -1,3 +1,4 @@
+"""Local + cloud file management utilities: sharded paths, temp files, and S3 uploads/downloads."""
 from __future__ import annotations
 import dataclasses
 import hashlib
@@ -57,6 +58,7 @@ def atomic_move(temp_file_path: Path | str, dest_path: Path | str) -> None:
 
 @dataclasses.dataclass
 class LocalConfig:
+    """Settings for local storage: base path, caching, and temp files."""
     base_path: Path
     save_local: bool
     cache_files: bool
@@ -65,6 +67,7 @@ class LocalConfig:
 
 @dataclasses.dataclass
 class CloudConfig:
+    """Settings for cloud storage mirroring."""
     enable: bool
     base_path: Path
     max_upload_threads: int
@@ -73,6 +76,7 @@ class CloudConfig:
 
 
 class FileManager:
+    """Handles sharded local paths and optional S3 mirroring."""
     def __init__(self, local_cfg: LocalConfig, cloud_cfg: CloudConfig):
         self.local_cfg = local_cfg
         self.cloud_cfg = cloud_cfg
@@ -97,6 +101,7 @@ class FileManager:
         return self.local_cfg.base_path / relative_path
 
     def collect_result(self, temp_path: Path, dest_path: Path, blocking: bool = True, callback: UploadCallBack = None):
+        """Move a temp file into place locally and optionally upload to cloud."""
         relative_dest = dest_path
         if dest_path.is_absolute():
             try:
@@ -116,13 +121,14 @@ class FileManager:
         return (self.local_cfg.base_path / relative_path).exists()
 
     def exists_cloud(self, relative_path: Path) -> bool:
+        """Check if a relative path exists in cloud storage."""
         if self.cloud_cfg.enable and self.cloud is not None:
             return self.cloud.exists(self.cloud_cfg.base_path / relative_path)
         return False
 
     def cloud_upload(self, local_path: Path, relative_path: Path,
                      blocking: bool = True, callback: UploadCallBack = None):
-
+        """Upload a local file to cloud at the given relative path."""
         if not self.cloud:
             raise ValueError("Cloud store is not enabled")
         self.cloud.upload(local_path, self.cloud_cfg.base_path / relative_path, blocking=blocking, callback=callback)
@@ -141,6 +147,7 @@ class FileManager:
             self.cloud.close()
 
     class _LoadDataManager:
+        """Context manager to fetch a file from local or cloud, returning a file handle."""
         def __init__(self, file_manager_instance: FileManager, path: Path, **kwargs):
             self.fm_instance = file_manager_instance
             self.relative_path = path

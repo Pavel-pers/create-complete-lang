@@ -1,3 +1,4 @@
+"""S3-backed object store with optional async uploads, retries, and configurable connection pooling."""
 import logging
 import threading
 import time
@@ -27,6 +28,7 @@ _RETRYABLE_UPLOAD_ERRORS = (
 
 
 class UploadCallBack(ABC):
+    """Interface for upload callbacks to report success or failure."""
     @abstractmethod
     def on_upload_succes(self):
         pass
@@ -37,6 +39,7 @@ class UploadCallBack(ABC):
 
 
 class EmptyUploadCallBack(UploadCallBack):
+    """No-op callback used as a default placeholder."""
     def __init__(self):
         pass
 
@@ -48,6 +51,7 @@ class EmptyUploadCallBack(UploadCallBack):
 
 
 class S3Store:
+    """S3/Yandex Object Storage client with optional async uploads and retry logic."""
     def __init__(
         self,
         cfg: S3Config,
@@ -89,6 +93,7 @@ class S3Store:
             self.upload_threads = None
 
     def _upload_worker(self, worker_logger: logx.BoundLogger) -> None:
+        """Background worker that drains the queue and processes uploads."""
         while True:
             try:
                 task_info: tuple[tuple[Path, Path], UploadCallBack] | None
@@ -115,6 +120,7 @@ class S3Store:
                 self.upload_queue.task_done()
 
     def _to_key(self, relative: Path) -> str:
+        """Build S3 object key from a relative path and root_prefix."""
         relative_raw = PurePosixPath(relative.as_posix().lstrip("/"))
         prefix_raw = self.cfg.root_prefix.as_posix().strip("/")
         if prefix_raw and prefix_raw != ".":
@@ -122,6 +128,7 @@ class S3Store:
         return relative_raw.as_posix()
 
     def exists(self, relative_key: Path) -> bool:
+        """Return True if the object exists in the bucket."""
         key = self._to_key(relative_key)
         try:
             self.client.head_object(Bucket=self.cfg.bucket, Key=key)
@@ -132,6 +139,7 @@ class S3Store:
             raise
 
     def _upload_blocking(self, local_path: Path, relative_key: Path):
+        """Upload synchronously with retries on transient connection errors."""
         key = self._to_key(relative_key)
         attempt = 1
         while True:
@@ -156,6 +164,7 @@ class S3Store:
                 attempt += 1
 
     def upload(self, local_path: Path, relative_key: Path, blocking: bool = True, callback: UploadCallBack = None):
+        """Upload file either synchronously or enqueue for async processing; invoke callbacks."""
         if callback is None:
             callback = EmptyUploadCallBack()
         if blocking or self.upload_queue is None:
@@ -169,10 +178,12 @@ class S3Store:
             self.upload_queue.put(((local_path, relative_key), callback))
 
     def download(self, relative_key: Path, dest_local_path: Path):
+        """Download a single object to the given local path."""
         key = self._to_key(relative_key)
         self.client.download_file(self.cfg.bucket, key, str(dest_local_path))
 
     def close(self):
+        """Drain the upload queue and stop worker threads."""
         if self.upload_queue is None or self.upload_threads is None:
             return
         for _ in self.upload_threads:
