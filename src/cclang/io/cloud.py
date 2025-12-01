@@ -86,7 +86,7 @@ class S3Store:
             self.upload_queue: Queue[tuple[tuple[Path, Path], UploadCallBack] | None] | None = Queue()
             self.upload_threads = [
                 threading.Thread(target=self._upload_worker,
-                                 args=(logger.bind(thread=f'upload_worker_{idx}'),),
+                                 args=(logger.bind(worker=f'upload_worker_{idx}'),),
                                  daemon=False)
                 for idx in range(max_upload_threads)
             ]

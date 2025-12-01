@@ -224,7 +224,7 @@ def run_pipeline(
                             shard_relative = output_base_rel / file_manager.shard_relative_path(
                                 temp_result.text_sha, '.jsonl'
                             )
-                            file_manager.collect_result(temp_result.tmp_file, shard_relative)
+                            file_manager.collect_result(temp_result.tmp_file, shard_relative, blocking=True)
 
                             worker_result = ProcessedPdfManifestRecord(
                                 pdf_path=task.pdf_path,
@@ -262,7 +262,7 @@ def run_pipeline(
                     task_queue.task_done()
 
         work_threads = [threading.Thread(target=extract_text_worker, args=(log.bind(thread_name=f'extract_worker_{ind}'),))
-                        for ind in range(12)]
+                        for ind in range(16)]
         for work_thread in work_threads:
             work_thread.start()
 
