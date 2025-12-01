@@ -1,4 +1,6 @@
+"""SQLite-backed store that tracks fetched items (url, sha256, local path, timestamp)."""
 from collections.abc import Mapping
+
 from datetime import datetime
 import threading
 from typing import Any
@@ -26,11 +28,14 @@ def _fetched_item_from_db_resp(resp: Mapping[str, Any] | tuple[Any, ...] | None)
 
 
 class FetchedItemsStore:
+    """Thread-safe registry of fetched items to avoid duplicate downloads."""
     def __init__(self, conn: psycopg.Connection):
         self._db_conn = conn
         self._lock = threading.Lock()
 
     def get_url(self, url: str | HttpUrl) -> FetchedItem | None:
+      """Return a fetched item by URL or None if absent."""
+
         url = str(url)
         with self._lock:
             if self._db_conn is None:
@@ -43,7 +48,9 @@ class FetchedItemsStore:
                 response_row = cur.fetchone()
                 return _fetched_item_from_db_resp(response_row)
 
+
     def get_sha256(self, sha256: str) -> FetchedItem | None:
+        """Return a fetched item by sha256 or None if absent."""
         with self._lock:
             if self._db_conn is None:
                 raise RuntimeError('invalid access to closed connection')
@@ -57,6 +64,7 @@ class FetchedItemsStore:
                 return _fetched_item_from_db_resp(response_row)
 
     def update_fetch_item(self, url: str | HttpUrl, sha256: str, local_path: str, ts: str | None = None):
+        """Insert a fetched item record into SQLite."""
         url = str(url)
         ts = ts or datetime.now().isoformat() + 'Z'
         with self._lock:

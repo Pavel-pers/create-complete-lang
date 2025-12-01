@@ -1,3 +1,4 @@
+"""S3/Yandex Object Storage configuration helpers sourced from environment variables."""
 from dataclasses import dataclass
 from pathlib import Path
 import os
@@ -7,6 +8,7 @@ from contourpy import max_threads
 
 @dataclass
 class S3Config:
+    """Runtime S3 credentials and addressing."""
     enable: bool
     bucket: str
     root_prefix: Path
@@ -23,4 +25,3 @@ def load_s3_config() -> S3Config:
         access_key=os.environ.get("AWS_ACCESS_KEY_ID"),
         secret_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
     )
-

@@ -1,3 +1,4 @@
+"""Pipeline to download PDFs listed in a manifest, store them locally, and mirror to S3."""
 import argparse
 import json
 import logging
@@ -22,6 +23,7 @@ from cclang.models.tasks_queue import TaskQueue
 
 
 def get_fetch_tasks(info_path: Path, max_count: int | None = None) -> List[HttpUrl]:
+    """Load SourcePDF URLs from JSONL file, optionally limiting count."""
     tasks: List[HttpUrl] = []
     with open(info_path, 'r', encoding="utf-8") as f:
         for line in f:
@@ -33,6 +35,7 @@ def get_fetch_tasks(info_path: Path, max_count: int | None = None) -> List[HttpU
 
 
 def _ensure_relative(path: Path, base: Path, label: str) -> Path:
+    """Convert absolute path to relative to base; accept already-relative paths."""
     if path.is_absolute():
         try:
             return path.relative_to(base)
@@ -44,6 +47,7 @@ def _ensure_relative(path: Path, base: Path, label: str) -> Path:
 
 
 def _ensure_absolute(path: Path, base: Path) -> Path:
+    """Return absolute path rooted at base when input is relative."""
     if path.is_absolute():
         return path
     if path.parts and path.parts[0] == base.name:
@@ -60,6 +64,7 @@ def run_pipeline(
     max_count: int | None = None,
     data_path: Path = Path("data"),
 ) -> None:
+    """Download PDFs concurrently, avoid duplicates, write manifest, mirror to S3 if enabled."""
     stop_event = threading.Event()
     data_path = Path(data_path)
     data_path.mkdir(parents=True, exist_ok=True)
