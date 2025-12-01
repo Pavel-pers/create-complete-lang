@@ -7,6 +7,7 @@ import pytesseract
 from dataclasses import dataclass
 import pdf2image
 from typing import Optional, Iterable
+from dotenv import load_dotenv
 
 from cclang.common.logx import BoundLogger, setup_logging, get_logger
 from cclang.config.s3 import load_s3_config
@@ -113,8 +114,6 @@ def run_pipeline(
     output_base_abs = data_path / output_base_rel
     output_base_abs.mkdir(parents=True, exist_ok=True)
 
-    manifest_path_abs = _ensure_absolute(Path(manifest_path), data_path)
-    manifest_path_abs.parent.mkdir(parents=True, exist_ok=True)
     db_conn = get_conn(database_dsn)
 
     s3_cfg = load_s3_config()
@@ -128,7 +127,7 @@ def run_pipeline(
         cloud_cfg=CloudConfig(enable=s3_cfg.enable, base_path=Path("data"), s3_config=s3_cfg, max_upload_threads=8),
     )
 
-    manifest = ManifestStore(manifest_path_abs, ProcessedPdfManifestRecord, file_manager)
+    manifest = ManifestStore(manifest_path, ProcessedPdfManifestRecord, file_manager)
     pdf_states = PdfStateStore(db_conn)
     try:
         if sync_with_fetched_items:
@@ -260,6 +259,7 @@ def run_pipeline(
 
 
 def main(argv: Iterable[str] | None = None) -> None:
+    load_dotenv()
     arg_parser = argparse.ArgumentParser(
         description='Extract text from pdf files'
     )
@@ -293,7 +293,7 @@ def main(argv: Iterable[str] | None = None) -> None:
 
     args = arg_parser.parse_args(argv)
 
-    manifest_path = args.manifest_path or Path("data/manifests/pl_extract_text.jsonl")
+    manifest_path = args.manifest_path or Path("manifests/pl_extract_text.jsonl")
     database_dsn = args.database_dsn
     data_path = args.data_path or Path("data")
 

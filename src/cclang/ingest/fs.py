@@ -100,6 +100,9 @@ class FileManager:
     def resolve_local(self, relative_path: Path) -> Path:
         return self.local_cfg.base_path / relative_path
 
+    def mkdir(self, relative_path: Path) -> None:
+        self.resolve_local(relative_path).parent.mkdir(parents=True, exist_ok=True)
+
     def collect_result(self, temp_path: Path, dest_path: Path, blocking: bool = True, callback: UploadCallBack = None):
         """Move a temp file into place locally and optionally upload to cloud."""
         relative_dest = dest_path
