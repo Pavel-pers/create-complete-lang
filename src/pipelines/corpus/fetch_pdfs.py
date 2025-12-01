@@ -59,7 +59,7 @@ def run_pipeline(
     urls_path: Path,
     output_base_path: Path,
     manifest_path: Path,
-    database_path: Path,
+    database_dsn: str | None,
     log: BoundLogger,
     max_count: int | None = None,
     data_path: Path = Path("data"),
@@ -76,10 +76,7 @@ def run_pipeline(
     manifest_path_abs = _ensure_absolute(Path(manifest_path), data_path)
     manifest_path_abs.parent.mkdir(parents=True, exist_ok=True)
 
-    database_path_abs = _ensure_absolute(Path(database_path), data_path)
-    database_path_abs.parent.mkdir(parents=True, exist_ok=True)
-
-    db_conn = get_conn(database_path_abs)
+    db_conn = get_conn(database_dsn)
 
     s3_cfg = load_s3_config()
     file_manager = FileManager(
@@ -215,6 +212,8 @@ def run_pipeline(
         while any(thread.is_alive() for thread in work_threads) or not result_queue.empty():
             if stop_event.is_set() and result_queue.empty():
                 break
+            if task_queue.unfinished_tasks == 0 and result_queue.empty():
+                break
             try:
                 result = result_queue.get(timeout=2)
                 manifest.mark(result)
@@ -254,7 +253,15 @@ def main(argv: Iterable[str] | None = None) -> None:
     arg_parser.add_argument('--output-base-path', required=True, help='output base path (relative to data base)', type=Path)
     arg_parser.add_argument('--manifest-path', default=None, required=False, help='path to pipeline manifest',
                             type=Path)
-    arg_parser.add_argument('--database-path', default=None, required=False, help='path to database', type=Path)
+    arg_parser.add_argument(
+        '--database-dsn',
+        '--database-url',
+        dest='database_dsn',
+        default=None,
+        required=False,
+        help='PostgreSQL DSN; if not provided CCLANG_DB_DSN env var is used',
+        type=str,
+    )
     arg_parser.add_argument('--data-path', default=None, required=False,
                             help='root directory for pipeline artifacts', type=Path)
     arg_parser.add_argument('--log-level', choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO",
@@ -269,7 +276,7 @@ def main(argv: Iterable[str] | None = None) -> None:
 
     data_path = args.data_path or Path("data")
     manifest_path = args.manifest_path or Path("manifests/pl_fetch_pdfs.jsonl")
-    database_path = args.database_path or Path("databases/pipelines.sql")
+    database_dsn = args.database_dsn
 
     log_file = args.log_file or Path("data/logs/corpus/fetch_pdfs.log")
     log_file = Path(log_file)
@@ -284,7 +291,7 @@ def main(argv: Iterable[str] | None = None) -> None:
     max_count = args.head if args.head is not None else None
     try:
         return run_pipeline(urls_path=args.urls_path, output_base_path=args.output_base_path,
-                            manifest_path=manifest_path, database_path=database_path, log=log,
+                            manifest_path=manifest_path, database_dsn=database_dsn, log=log,
                             max_count=max_count, data_path=data_path)
     except Exception:
         log.exception("unexpected error")
