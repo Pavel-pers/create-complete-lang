@@ -6,6 +6,8 @@ from queue import Queue, Empty
 import pytesseract
 from dataclasses import dataclass
 import pdf2image
+from pdf2image.exceptions import PDFPageCountError, PDFInfoNotInstalledError, PDFPopplerTimeoutError
+from subprocess import TimeoutExpired
 from typing import Optional, Iterable
 from dotenv import load_dotenv
 
@@ -20,6 +22,11 @@ from cclang.io.schemas import PdfState, ProcessingStatus, ProcessedPdfManifestRe
 from cclang.models.tasks_queue import TaskQueue
 from cclang.ingest.fs import FileManager
 
+OCR_DPI = 300
+POPPLER_TIMEOUT_SECONDS = 120
+# Render a small batch of pages at a time so large PDFs do not explode memory or stall the worker.
+PDF_RENDER_BATCH_SIZE = 12
+
 
 def _ensure_relative(path: Path, base: Path, label: str) -> Path:
     """Convert absolute path to relative to base; accept already-relative paths."""
@@ -33,13 +40,38 @@ def _ensure_relative(path: Path, base: Path, label: str) -> Path:
     return path
 
 
-def _ensure_absolute(path: Path, base: Path) -> Path:
-    """Return absolute path rooted at base when input is relative."""
-    if path.is_absolute():
-        return path
-    if path.parts and path.parts[0] == base.name:
-        path = Path(*path.parts[1:])
-    return base / path
+def _iter_pdf_pages(pdf_local_path: Path, logger: BoundLogger):
+    """Yield (page_number, image) pairs in batches to avoid loading entire PDFs into memory."""
+    info = pdf2image.pdfinfo_from_path(
+        str(pdf_local_path),
+        timeout=POPPLER_TIMEOUT_SECONDS,
+    )
+    total_pages = int(info.get("Pages", 0))
+    if total_pages <= 0:
+        raise PDFPageCountError(f"pdfinfo did not return a valid page count for {pdf_local_path}")
+    logger.info(
+        "pdf page count resolved",
+        extra={"pdf": str(pdf_local_path), "pages": total_pages},
+    )
+    for chunk_start in range(1, total_pages + 1, PDF_RENDER_BATCH_SIZE):
+        chunk_end = min(chunk_start + PDF_RENDER_BATCH_SIZE - 1, total_pages)
+        logger.debug(
+            "rendering pdf pages",
+            extra={
+                "pdf": str(pdf_local_path),
+                "start_page": chunk_start,
+                "end_page": chunk_end,
+            },
+        )
+        pages = pdf2image.convert_from_path(
+            str(pdf_local_path),
+            dpi=OCR_DPI,
+            first_page=chunk_start,
+            last_page=chunk_end,
+            timeout=POPPLER_TIMEOUT_SECONDS,
+        )
+        for page_num, page in enumerate(pages, start=chunk_start):
+            yield page_num, page
 
 
 def extract_text_from_page(page):
@@ -63,31 +95,47 @@ def extract_text_from_pdf_to_temp(pdf_path: Path,
                                   logger: BoundLogger,
                                   fm: FileManager,
                                   ) -> ExtractedTextResult:
+    logger.debug("start ocr", extra={"pdf": str(pdf_path)})
     result: ExtractedTextResult | None = None
     keep_file = False
     temp_dist = fm.create_temp_file(".jsonl.part")
     try:
         temp_dist.parent.mkdir(parents=True, exist_ok=True)
         with fm.load_data(pdf_path, mode='rb') as pdf_file:
-            pdf_bytes = pdf_file.read()
+            pdf_local_path = Path(pdf_file.name)
 
-        pages = pdf2image.convert_from_bytes(pdf_bytes, dpi=300)
-        with open(temp_dist, "w", encoding="utf-8", newline='') as stream:
-            for i, page in enumerate(pages):
-                page_text = extract_text_from_page(page)
-                page_meta = {"page_num": i + 1, "language": "mr", "ocr_engine": "tesseract"}
-                stream.write(
-                    DocRaw(
-                        id=pdf_sha + '#' + str(i + 1),
-                        text=page_text,
-                        meta=page_meta,
-                    ).model_dump_json(ensure_ascii=False)
-                )
-                stream.write("\n")
+            with open(temp_dist, "w", encoding="utf-8", newline='') as stream:
+                pages_processed = 0
+                for page_num, page in _iter_pdf_pages(pdf_local_path, logger):
+                    try:
+                        page_text = extract_text_from_page(page)
+                    finally:
+                        try:
+                            page.close()
+                        except Exception:  # noqa BLE:001
+                            logger.debug(
+                                "failed to close rendered page",
+                                extra={"pdf": str(pdf_local_path), "page_num": page_num},
+                            )
+                    pages_processed += 1
+                    page_meta = {"page_num": page_num, "language": "mr", "ocr_engine": "tesseract"}
+                    stream.write(
+                        DocRaw(
+                            id=pdf_sha + '#' + str(page_num),
+                            text=page_text,
+                            meta=page_meta,
+                        ).model_dump_json(ensure_ascii=False)
+                    )
+                    stream.write("\n")
+        logger.info("pdf rendered to images", extra={"pdf": str(pdf_path), "pages": pages_processed})
         keep_file = True
         result = ExtractedTextResult(tmp_file=temp_dist, text_sha=fs.calculate_sha256(temp_dist))
+    except (PDFPageCountError, PDFInfoNotInstalledError, TimeoutExpired, PDFPopplerTimeoutError) as exc:
+        result = ExtractedTextResult(tmp_file=None, text_sha=None, error=str(exc))
+        logger.warning("failed to render pdf", extra={"pdf": str(pdf_path), "error": str(exc)})
     except pytesseract.TesseractError as exc:
         result = ExtractedTextResult(tmp_file=None, text_sha=None, error=str(exc))
+        logger.warning("tesseract error", extra={"pdf": str(pdf_path), "error": str(exc)})
     finally:
         if not keep_file:
             try:
@@ -124,7 +172,7 @@ def run_pipeline(
             cache_files=True,
             temp_base=data_path / "temp/extract_text",
         ),
-        cloud_cfg=CloudConfig(enable=s3_cfg.enable, base_path=Path("data"), s3_config=s3_cfg, max_upload_threads=8),
+        cloud_cfg=CloudConfig(enable=s3_cfg.enable, base_path=Path("data"), s3_config=s3_cfg, max_upload_threads=2),
     )
 
     manifest = ManifestStore(manifest_path, ProcessedPdfManifestRecord, file_manager)

@@ -13,7 +13,8 @@ def get_conn(database_dsn: str | None) -> psycopg.Connection:
     if not dsn:
         raise RuntimeError(f"{DB_DSN_ENV} is not set")
 
-    conn = psycopg.connect(dsn)
+    # Add a short connect timeout so a bad network/host does not hang the pipeline startup.
+    conn = psycopg.connect(dsn, connect_timeout=5)
     ensure_schema(conn)
     return conn
 

@@ -160,7 +160,15 @@ class FileManager:
             self.kwargs = kwargs
 
         def __enter__(self):
-            if self.fm_instance.exists_local(self.relative_path):
+            if Path(self.relative_path).is_absolute():
+                # Absolute paths are treated as local-only to avoid slow/broken S3 lookups.
+                resolved_path = Path(self.relative_path)
+                # Create parent dirs if the requested mode implies writing.
+                mode = self.kwargs.get("mode", "")
+                if any(flag in mode for flag in ("w", "a", "+")):
+                    resolved_path.parent.mkdir(parents=True, exist_ok=True)
+                self.is_temporary = False
+            elif self.fm_instance.exists_local(self.relative_path):
                 resolved_path = self.fm_instance.resolve_local(self.relative_path)
                 self.is_temporary = False
             elif self.fm_instance.exists_cloud(self.relative_path):

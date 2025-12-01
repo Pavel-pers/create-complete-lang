@@ -72,7 +72,11 @@ class S3Store:
             aws_access_key_id=cfg.access_key,
             aws_secret_access_key=cfg.secret_key,
             endpoint_url="https://storage.yandexcloud.net",
-            config=Config(max_pool_connections=pool_connections)
+            config=Config(
+                max_pool_connections=pool_connections,
+                connect_timeout=10,
+                read_timeout=60,
+            )
         )
         self.upload_max_attempts = max(upload_max_attempts, 1)
         self.upload_base_backoff = max(upload_base_backoff, 0.0)
