@@ -5,13 +5,15 @@ from typing import TypeVar, Generic, Type
 import json
 from pydantic import BaseModel
 
+from cclang.ingest.fs import FileManager
+
 ManifestRecord = TypeVar("ManifestRecord")
 class ManifestStore(Generic[ManifestRecord]):
     """Append-only JSONL manifest storage with in-memory index."""
-    def __init__(self, manifest_path: Path, model_class: Type[BaseModel], flush_every: int = 1):
+    def __init__(self, manifest_path: Path, model_class: Type[BaseModel], fm: FileManager, flush_every: int = 1):
         self._manifest_path: Path = manifest_path
         self._manifest_path.parent.mkdir(parents=True, exist_ok=True)
-
+        self._fm = fm
         self._items: dict = {}
         # RLock is required because mark() may call flush() under the same lock
         self._lock = threading.RLock()
@@ -23,7 +25,7 @@ class ManifestStore(Generic[ManifestRecord]):
         if not self._manifest_path.exists():
             return
 
-        with open(self._manifest_path, "r", encoding='utf-8') as f:
+        with self._fm.load_data(self._manifest_path, mode="r", encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
                 payload = json.loads(line)
@@ -36,7 +38,11 @@ class ManifestStore(Generic[ManifestRecord]):
             return
 
         with self._lock:
-            with open(self._manifest_path, "a", encoding='utf-8') as f:
+            # Ensure manifest file exists locally so FileManager can open it for append.
+            resolved_manifest_path = self._fm.resolve_local(self._manifest_path)
+            resolved_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            resolved_manifest_path.touch(exist_ok=True)
+            with self._fm.load_data(self._manifest_path, mode="a", encoding='utf-8') as f:
                 for record in self._buffer:
                     payload = record.model_dump(mode="json")
                     f.write(json.dumps(payload, ensure_ascii=False) + "\n")

@@ -1,4 +1,4 @@
-"""SQLite-backed store that tracks fetched items (url, sha256, local path, timestamp)."""
+"""PostgreSQL-backed store that tracks fetched items (url, sha256, local path, timestamp)."""
 from collections.abc import Mapping
 
 from datetime import datetime
@@ -34,7 +34,7 @@ class FetchedItemsStore:
         self._lock = threading.Lock()
 
     def get_url(self, url: str | HttpUrl) -> FetchedItem | None:
-      """Return a fetched item by URL or None if absent."""
+        """Return a fetched item by URL or None if absent."""
 
         url = str(url)
         with self._lock:
@@ -47,7 +47,6 @@ class FetchedItemsStore:
                 )
                 response_row = cur.fetchone()
                 return _fetched_item_from_db_resp(response_row)
-
 
     def get_sha256(self, sha256: str) -> FetchedItem | None:
         """Return a fetched item by sha256 or None if absent."""
@@ -64,7 +63,7 @@ class FetchedItemsStore:
                 return _fetched_item_from_db_resp(response_row)
 
     def update_fetch_item(self, url: str | HttpUrl, sha256: str, local_path: str, ts: str | None = None):
-        """Insert a fetched item record into SQLite."""
+        """Insert a fetched item record into the database."""
         url = str(url)
         ts = ts or datetime.now().isoformat() + 'Z'
         with self._lock:

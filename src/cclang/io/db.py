@@ -52,17 +52,17 @@ def ensure_schema(conn: psycopg.Connection) -> None:
             text_sha            TEXT,
             text_path           TEXT,
             text_status         TEXT,
-            text_updated_at     TEXT,
+            text_updated_at     TIMESTAMPTZ,
 
             tokenize_sha        TEXT,
             tokenize_path       TEXT,
             tokenize_status     TEXT,
-            tokenize_updated_at TEXT,
+            tokenize_updated_at TIMESTAMPTZ,
 
             lemma_sha           TEXT,
             lemma_path          TEXT,
             lemma_status        TEXT,
-            lemma_updated_at    TEXT
+            lemma_updated_at    TIMESTAMPTZ
         );
            """
         )

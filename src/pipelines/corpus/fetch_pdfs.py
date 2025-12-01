@@ -90,7 +90,7 @@ def run_pipeline(
     )
 
     fetched_items = FetchedItemsStore(db_conn)
-    manifest = ManifestStore(manifest_path_abs, FetchManifestRecord)
+    manifest = ManifestStore(manifest_path_abs, FetchManifestRecord, file_manager)
 
     tasks = get_fetch_tasks(urls_path, max_count=max_count)
     tasks = list(filter(lambda task_: not fetched_items.has_url(task_), tasks))

@@ -25,7 +25,7 @@ class DownloadResult:
 
 def download_file_to_temp(
     url: str,
-    fm: fs.FileManager | None,
+    fm: fs.FileManager | None = None,
     download_folder: Path | str = Path("data/temp/downloads"),
 ) -> DownloadResult:
     """
