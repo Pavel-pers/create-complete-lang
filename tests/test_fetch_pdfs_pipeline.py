@@ -1,6 +1,5 @@
 import hashlib
 import json
-import sqlite3
 from pathlib import Path
 
 from cclang.common.logx import get_logger
@@ -8,6 +7,54 @@ from cclang.ingest.net import DownloadResult
 from cclang.io.schemas import SourcePDF
 from cclang.ingest.fs import get_shard_path
 from pipelines.corpus.fetch_pdfs import run_pipeline
+
+
+class InMemoryCursor:
+    def __init__(self, storage: list[tuple[str, str, str, str]]):
+        self._storage = storage
+        self._result: list[tuple[str, str, str, str]] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        return False
+
+    def execute(self, query: str, params=None):
+        params = tuple(params or [])
+        normalized = " ".join(query.lower().split())
+        if "from fetch_items where url" in normalized:
+            url = params[0]
+            self._result = [row for row in self._storage if row[0] == url]
+        elif "from fetch_items where sha256" in normalized:
+            sha = params[0]
+            self._result = [row for row in self._storage if row[1] == sha]
+        elif normalized.startswith("insert into fetch_items"):
+            self._storage.append((params[0], params[1], params[2], params[3]))
+            self._result = []
+        else:
+            self._result = []
+
+    def fetchone(self):
+        return self._result[0] if self._result else None
+
+    def fetchall(self):
+        return list(self._result)
+
+
+class InMemoryConnection:
+    def __init__(self):
+        self.rows: list[tuple[str, str, str, str]] = []
+        self.closed = False
+
+    def cursor(self, *_, **__):
+        return InMemoryCursor(self.rows)
+
+    def commit(self):
+        return None
+
+    def close(self):
+        self.closed = True
 
 
 def test_run_pipeline_reuses_existing_file_and_updates_db(monkeypatch, tmp_path: Path):
@@ -19,8 +66,8 @@ def test_run_pipeline_reuses_existing_file_and_updates_db(monkeypatch, tmp_path:
     output_base_rel = Path("artifacts/raw_pdfs")
     output_base_abs = data_base / output_base_rel
     manifest_path = data_base / "manifests" / "manifest.jsonl"
-    db_path = data_base / "db.sqlite"
     urls_path = tmp_path / "urls.jsonl"
+    db_conn = InMemoryConnection()
 
     # Precreate shard path to simulate already downloaded file
     shard_path_abs = get_shard_path(output_base_abs, file_sha, ".pdf")
@@ -36,21 +83,36 @@ def test_run_pipeline_reuses_existing_file_and_updates_db(monkeypatch, tmp_path:
     def fake_download(file_url: str, *, fm=None, download_folder=None):
         assert file_url == url
         assert fm is not None
-        return DownloadResult(status=200, size_bytes=len(file_bytes), tmp_file=temp_file, sha256=file_sha)
+        return DownloadResult(
+            status=200,
+            size_bytes=len(file_bytes),
+            tmp_file=temp_file,
+            sha256=file_sha,
+        )
 
     monkeypatch.setattr("pipelines.corpus.fetch_pdfs.download_file_to_temp", fake_download)
+    monkeypatch.setattr("pipelines.corpus.fetch_pdfs.get_conn", lambda _: db_conn)
 
     with open(urls_path, "w", encoding="utf-8") as f:
         f.write(SourcePDF(url=url, lang="mr", source="epustakalay").model_dump_json() + "\n")
 
     log = get_logger("test")
-    run_pipeline(urls_path=urls_path, output_base_path=output_base_rel, manifest_path=manifest_path,
-                 database_path=db_path, log=log, max_count=1, data_path=data_base)
+    run_pipeline(
+        urls_path=urls_path,
+        output_base_path=output_base_rel,
+        manifest_path=manifest_path,
+        database_dsn="postgresql://example",
+        log=log,
+        max_count=1,
+        data_path=data_base,
+    )
 
     # Temp file must be removed because shard already existed
     assert not temp_file.exists()
     # Manifest should contain a single OK record pointing to the shard path
-    manifest_records = [json.loads(line) for line in manifest_path.read_text().splitlines() if line.strip()]
+    manifest_records = [
+        json.loads(line) for line in manifest_path.read_text().splitlines() if line.strip()
+    ]
     assert len(manifest_records) == 1
     record = manifest_records[0]
     assert record["status"] == "ok"
@@ -58,8 +120,4 @@ def test_run_pipeline_reuses_existing_file_and_updates_db(monkeypatch, tmp_path:
     # File still exists on disk at the absolute location
     assert shard_path_abs.exists()
     # DB should have the mapping url -> sha -> path
-    conn = sqlite3.connect(db_path)
-    cur = conn.execute("SELECT url, sha256, local_path FROM fetch_items")
-    rows = cur.fetchall()
-    conn.close()
-    assert rows == [(url, file_sha, str(shard_path_rel))]
+    assert [(row[0], row[1], row[2]) for row in db_conn.rows] == [(url, file_sha, str(shard_path_rel))]
