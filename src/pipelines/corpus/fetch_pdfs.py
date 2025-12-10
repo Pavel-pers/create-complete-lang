@@ -8,12 +8,11 @@ import threading
 from pathlib import Path
 from queue import Empty, Queue
 from typing import Iterable, List
-
 from pydantic import HttpUrl
 
 from cclang.common.logx import BoundLogger, get_logger, setup_logging
 from cclang.config.s3 import load_s3_config
-from cclang.ingest.fs import CloudConfig, FileManager, LocalConfig
+from cclang.ingest.fs import CloudConfig, FileManager, LocalConfig, ensure_relative, ensure_absolute, get_shard_relative
 from cclang.ingest.net import download_file_to_temp
 from cclang.io.db import get_conn
 from cclang.io.fetched_items_store import FetchedItemsStore
@@ -33,28 +32,6 @@ def get_fetch_tasks(info_path: Path, max_count: int | None = None) -> List[HttpU
                 break
     return tasks
 
-
-def _ensure_relative(path: Path, base: Path, label: str) -> Path:
-    """Convert absolute path to relative to base; accept already-relative paths."""
-    if path.is_absolute():
-        try:
-            return path.relative_to(base)
-        except ValueError as exc:
-            raise ValueError(f"{label} must be inside data base path {base}") from exc
-    if path.parts and path.parts[0] == base.name:
-        return Path(*path.parts[1:])
-    return path
-
-
-def _ensure_absolute(path: Path, base: Path) -> Path:
-    """Return absolute path rooted at base when input is relative."""
-    if path.is_absolute():
-        return path
-    if path.parts and path.parts[0] == base.name:
-        path = Path(*path.parts[1:])
-    return base / path
-
-
 def run_pipeline(
     urls_path: Path,
     output_base_path: Path,
@@ -69,11 +46,11 @@ def run_pipeline(
     data_path = Path(data_path)
     data_path.mkdir(parents=True, exist_ok=True)
 
-    output_base_rel = _ensure_relative(Path(output_base_path), data_path, "output_base_path")
+    output_base_rel = ensure_relative(Path(output_base_path), data_path, "output_base_path")
     output_base_abs = data_path / output_base_rel
     output_base_abs.mkdir(parents=True, exist_ok=True)
 
-    manifest_path_abs = _ensure_absolute(Path(manifest_path), data_path)
+    manifest_path_abs = ensure_absolute(Path(manifest_path), data_path)
     manifest_path_abs.parent.mkdir(parents=True, exist_ok=True)
 
     db_conn = get_conn(database_dsn)
@@ -138,7 +115,7 @@ def run_pipeline(
                         )
                     else:
                         temp_result_path = temp_result.tmp_file
-                        shard_relative = output_base_rel / file_manager.shard_relative_path(
+                        shard_relative = output_base_rel / get_shard_relative(
                             temp_result.sha256, '.pdf'
                         )
                         new_result_path_abs = file_manager.resolve_local(shard_relative)

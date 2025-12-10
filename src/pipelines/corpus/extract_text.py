@@ -14,30 +14,18 @@ from dotenv import load_dotenv
 from cclang.common.logx import BoundLogger, setup_logging, get_logger
 from cclang.config.s3 import load_s3_config
 from cclang.ingest import fs
-from cclang.ingest.fs import LocalConfig, CloudConfig
+from cclang.ingest.fs import LocalConfig, CloudConfig, ensure_relative
 from cclang.io.db import get_conn
 from cclang.io.manifest import ManifestStore
 from cclang.io.pdf_state_store import PdfStateStore
 from cclang.io.schemas import PdfState, ProcessingStatus, ProcessedPdfManifestRecord, DocRaw
 from cclang.models.tasks_queue import TaskQueue
-from cclang.ingest.fs import FileManager
+from cclang.ingest.fs import FileManager, get_shard_relative
 
 OCR_DPI = 300
 POPPLER_TIMEOUT_SECONDS = 120
 # Render a small batch of pages at a time so large PDFs do not explode memory or stall the worker.
 PDF_RENDER_BATCH_SIZE = 12
-
-
-def _ensure_relative(path: Path, base: Path, label: str) -> Path:
-    """Convert absolute path to relative to base; accept already-relative paths."""
-    if path.is_absolute():
-        try:
-            return path.relative_to(base)
-        except ValueError as exc:
-            raise ValueError(f"{label} must be inside data base path {base}") from exc
-    if path.parts and path.parts[0] == base.name:
-        return Path(*path.parts[1:])
-    return path
 
 
 def _iter_pdf_pages(pdf_local_path: Path, logger: BoundLogger):
@@ -146,19 +134,19 @@ def extract_text_from_pdf_to_temp(pdf_path: Path,
 
 
 def run_pipeline(
-    output_base_path: Path,
-    database_dsn: str | None,
-    manifest_path: Path,
-    sync_with_fetched_items: bool,
-    log: BoundLogger,
-    target_status: ProcessingStatus | None = None,
-    max_count: int | None = None,
-    data_path: Path = Path("data"),
+        output_base_path: Path,
+        database_dsn: str | None,
+        manifest_path: Path,
+        sync_with_fetched_items: bool,
+        log: BoundLogger,
+        target_status: ProcessingStatus | None = ProcessingStatus.NOT_PROCESSED,
+        max_count: int | None = None,
+        data_path: Path = Path("data"),
 ) -> None:
     data_path = Path(data_path)
     data_path.mkdir(parents=True, exist_ok=True)
 
-    output_base_rel = _ensure_relative(Path(output_base_path), data_path, "output_base_path")
+    output_base_rel = ensure_relative(Path(output_base_path), data_path, "output_base_path")
     output_base_abs = data_path / output_base_rel
     output_base_abs.mkdir(parents=True, exist_ok=True)
 
@@ -184,7 +172,7 @@ def run_pipeline(
         task_queue: TaskQueue[PdfState] = TaskQueue(log.bind(service='TaskQueue'))
         tasks = pdf_states.filter_by_text_status(target_status)
         for task in tasks:
-            normalized_pdf_path = _ensure_relative(Path(task.pdf_path), data_path, "pdf_path")
+            normalized_pdf_path = ensure_relative(Path(task.pdf_path), data_path, "pdf_path")
             task_queue.put(task.model_copy(update={"pdf_path": str(normalized_pdf_path)}))
             if max_count is not None and task_queue.qsize() >= max_count:
                 break
@@ -221,7 +209,7 @@ def run_pipeline(
                                 text_sha=temp_result.text_sha,
                             )
                         else:
-                            shard_relative = output_base_rel / file_manager.shard_relative_path(
+                            shard_relative = output_base_rel / get_shard_relative(
                                 temp_result.text_sha, '.jsonl'
                             )
                             file_manager.collect_result(temp_result.tmp_file, shard_relative, blocking=True)
@@ -261,8 +249,9 @@ def run_pipeline(
                 finally:
                     task_queue.task_done()
 
-        work_threads = [threading.Thread(target=extract_text_worker, args=(log.bind(thread_name=f'extract_worker_{ind}'),))
-                        for ind in range(16)]
+        work_threads = [
+            threading.Thread(target=extract_text_worker, args=(log.bind(thread_name=f'extract_worker_{ind}'),))
+            for ind in range(16)]
         for work_thread in work_threads:
             work_thread.start()
 
@@ -324,8 +313,9 @@ def main(argv: Iterable[str] | None = None) -> None:
     )
     arg_parser.add_argument('--manifest-path', required=False, help='path to manifest', type=Path, default=None)
     arg_parser.add_argument('--sync-with-fetched-items', action='store_true', help='sync with fetched items')
-    arg_parser.add_argument('--target-status', choices=["none", ProcessingStatus.OK.value, ProcessingStatus.ERROR.value],
-                            default="none", help="Which text_status to process (none = not processed yet)")
+    arg_parser.add_argument('--target-status',
+                            choices=["pending", "none", ProcessingStatus.OK.value, ProcessingStatus.ERROR.value],
+                            default="pending", help="Which text_status to process (pending/none = not processed yet)")
     arg_parser.add_argument('--log-format', choices=["console", "json"], default="console")
     arg_parser.add_argument('--log-level', choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO")
     arg_parser.add_argument("--log-file", default=None, help="File for logs (JSONL)")
@@ -355,7 +345,11 @@ def main(argv: Iterable[str] | None = None) -> None:
     )
     log = get_logger("extract_text")
     max_count = args.head if args.head is not None else None
-    target_status = None if args.target_status == "none" else ProcessingStatus(args.target_status)
+    target_status = (
+        ProcessingStatus.NOT_PROCESSED
+        if args.target_status in ("none", "pending")
+        else ProcessingStatus(args.target_status)
+    )
     try:
         return run_pipeline(
             output_base_path=args.output_base_path,
@@ -370,6 +364,7 @@ def main(argv: Iterable[str] | None = None) -> None:
     except Exception:
         log.exception("unexpected error")
         raise
+
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
