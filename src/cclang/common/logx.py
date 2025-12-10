@@ -133,6 +133,22 @@ class BoundLogger(logging.LoggerAdapter):
             kwargs["extra"] = merged
         return msg, kwargs
 
+    def exception(self, msg, *args, exc: BaseException | None = None, **kwargs):
+        """
+        Log an ERROR with traceback and, when debug is enabled, attach structured error fields.
+
+        Extra fields:
+        - error_type: exception class name
+        - error_message: str(exc)
+        """
+        exc_obj = exc or sys.exc_info()[1]
+        extra = kwargs.pop("extra", {}) or {}
+        if self.logger.isEnabledFor(logging.DEBUG) and exc_obj is not None:
+            extra.setdefault("error_type", type(exc_obj).__name__)
+            extra.setdefault("error_message", str(exc_obj))
+        kwargs["exc_info"] = exc_obj or True
+        return super().log(logging.ERROR, msg, *args, extra=extra, **kwargs)
+
 # --- Filters -----------------------------------------------------------------
 class MaxLevelFilter(logging.Filter):
     """Pass only records with level <= max_level."""
