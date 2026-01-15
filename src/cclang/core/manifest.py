@@ -5,7 +5,7 @@ from typing import TypeVar, Generic, Type
 import json
 from pydantic import BaseModel
 
-from cclang.ingest.fs import FileManager
+from cclang.io.fs import FileManager
 
 ManifestRecord = TypeVar("ManifestRecord")
 class ManifestStore(Generic[ManifestRecord]):
@@ -25,7 +25,7 @@ class ManifestStore(Generic[ManifestRecord]):
         if not self._manifest_path.exists():
             return
 
-        with self._fm.load_data(self._manifest_path, mode="r", encoding='utf-8') as f:
+        with self._fm.ensure_file(self._manifest_path, mode="r", encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
                 payload = json.loads(line)
@@ -42,7 +42,7 @@ class ManifestStore(Generic[ManifestRecord]):
             resolved_manifest_path = self._fm.resolve_local(self._manifest_path)
             self._fm.mkdir(self._manifest_path)
             resolved_manifest_path.touch(exist_ok=True)
-            with self._fm.load_data(self._manifest_path, mode="a", encoding='utf-8') as f:
+            with self._fm.ensure_file(self._manifest_path, mode="a", encoding='utf-8') as f:
                 for record in self._buffer:
                     payload = record.model_dump(mode="json")
                     f.write(json.dumps(payload, ensure_ascii=False) + "\n")

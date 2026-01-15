@@ -1,0 +1,152 @@
+"""Local + cloud file management utilities: sharded paths, temp files, and S3 uploads/downloads."""
+from __future__ import annotations
+import dataclasses
+import hashlib
+import os
+import uuid
+from pathlib import Path
+from typing import Optional
+
+from cclang.io.exceptions import LocalStorageError
+
+def normalize_windows_path(self) -> Path:
+    raw_path = str(self._relative_path)
+    if not Path(raw_path).is_absolute():
+        raw_path = raw_path.replace("\\", "/")
+    return Path(raw_path)
+
+def ensure_relative(path: Path, base: Path, label: str) -> Path:
+    """Convert absolute path to relative to base; accept already-relative paths."""
+    if path.is_absolute():
+        try:
+            return path.relative_to(base)
+        except ValueError as exc:
+            raise ValueError(f"{label} must be inside data base path {base}") from exc
+    return path
+
+def ensure_absolute(path: Path, base: Path) -> Path:
+    """Return the absolute path rooted at base when input is relative."""
+    if path.is_absolute():
+        return path
+    if path.parts and path.parts[0] == base.name:
+        path = Path(*path.parts[1:])
+    return base / path
+
+def create_temp_file(base_path: Path, suff: str) -> Path:
+    base_path.mkdir(parents=True, exist_ok=True)
+    name = str(uuid.uuid4()) + suff
+    return base_path / name
+
+
+def get_shard_relative(file_name: str, file_suffix: str) -> Path:
+    shard_folder = file_name[:2].zfill(2)
+    return Path(shard_folder) / (file_name + file_suffix)
+
+
+def get_shard_path(base: Path, file_name: str, file_suffix: str) -> Path:
+    """
+    Public helper kept for backward compatibility.
+    """
+    return base / get_shard_relative(file_name, file_suffix)
+
+
+def calculate_sha256(path: Path | str) -> str:
+    path = Path(path)
+    sha = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            sha.update(chunk)
+    return sha.hexdigest()
+
+
+def atomic_move(temp_file_path: Path | str, dest_path: Path | str) -> None:
+    """
+    Atomic move temp downloaded file to shard folder.
+    """
+    dest_path = Path(dest_path)
+    temp_file_path = Path(temp_file_path)
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    os.replace(temp_file_path, dest_path)
+
+
+@dataclasses.dataclass
+class LocalConfig:
+    """Settings for local storage: base path, caching, and temp files."""
+    base_path: Path
+    save_local: bool
+    cache_files: bool
+    temp_base: Path
+
+
+class FileManager:
+    """Handles sharded local paths and optional S3 mirroring."""
+
+    def __init__(self, local_cfg: LocalConfig):
+        self.local_cfg = local_cfg
+
+    def _relative_to_local_base(self, path: Path) -> Path:
+        """
+        Make sure the path is relative to local_cfg.base_path.
+
+        Absolute paths outside of base_path -> LocalPathError.
+        Relative paths are returned as is.
+        """
+        return ensure_relative(path, self.local_cfg.base_path, "data file")
+
+    def create_temp_file(self, suffix: str = "") -> Path:
+        try:
+            return create_temp_file(self.local_cfg.temp_base, suffix)
+        except OSError as exc:
+            raise LocalStorageError(
+                f"Failed to create temp file in {self.local_cfg.temp_base!s}"
+            ) from exc
+
+    def shard_local_path(self, file_name: str, suffix: str = "") -> Path:
+        return get_shard_path(self.local_cfg.base_path, file_name, suffix)
+
+    def resolve_local(self, relative_path: Path) -> Path:
+        if relative_path.is_relative_to(self.local_cfg.base_path):
+            return relative_path
+        return self.local_cfg.base_path / relative_path
+
+    def mkdir(self, path: str | Path, treat_as_file: Optional[bool] = None) -> Path:
+        """
+        Behavior:
+        - If `treat_as_file` is None (default): the function tries to guess:
+            * if the path has a suffix (e.g. ".txt", ".pdf") -> treated as file path
+            * otherwise -> treated as directory path
+
+        Returns:
+            Path to the directory that was created (or already existed).
+        """
+        p = Path(path)
+
+        if treat_as_file is True:
+            # Force: always treat the path as a file path
+            target_dir = p.parent
+        elif treat_as_file is False:
+            # Force: always treat the path as a directory path
+            target_dir = p
+        else:
+            # Auto-detect: if there is a suffix, assume it's a file path
+            # Otherwise assume it's a directory path
+            target_dir = p if p.suffix == "" else p.parent
+
+        # Create the directory and all missing parents; do nothing if it already exists
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        return target_dir
+
+    def exists(self, relative_path: Path) -> bool:
+        return self.resolve_local(relative_path).exists()
+
+    def ensure_file(self, relative_path: Path) -> Path:
+        local_path = self.resolve_local(relative_path)
+        if not self.exists(relative_path):
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.touch()
+            return local_path
+        return local_path
+
+    def close(self):
+        pass

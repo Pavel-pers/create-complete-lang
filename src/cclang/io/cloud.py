@@ -1,4 +1,5 @@
 """S3-backed object store with optional async uploads, retries, and configurable connection pooling."""
+import dataclasses
 import logging
 import threading
 import time
@@ -49,6 +50,14 @@ class EmptyUploadCallBack(UploadCallBack):
     def on_upload_failed(self, exc_type, exc_value, traceback):
         pass
 
+@dataclasses.dataclass
+class CloudConfig:
+    """Settings for cloud storage mirroring."""
+    enable: bool
+    base_path: Path
+    max_upload_threads: int
+    s3_config: S3Config
+    max_pool_connections: int | None = None
 
 class S3Store:
     """S3/Yandex Object Storage client with optional async uploads and retry logic."""

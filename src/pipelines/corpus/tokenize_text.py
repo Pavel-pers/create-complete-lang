@@ -13,12 +13,12 @@ import hashlib
 
 from cclang.config.s3 import load_s3_config
 from cclang.io.db import get_conn
-from cclang.io.manifest import ManifestStore
+from cclang.core.manifest import ManifestStore
 from cclang.io.pdf_state_store import PdfStateStore
 from cclang.io.schemas import DocRaw, DocTok, ProcessingStatus, TokenizeManifestRecord
 from cclang.common.logx import BoundLogger, setup_logging, get_logger
-from cclang.ingest.fs import FileManager, ensure_relative, LocalConfig, CloudConfig, get_shard_relative
-from cclang.ingest.exceptions import LocalStorageError, CloudStorageError
+from cclang.io.fs import FileManager, ensure_relative, LocalConfig, CloudConfig, get_shard_relative
+from cclang.io.exceptions import LocalStorageError, CloudStorageError
 from cclang.models.tasks_queue import TaskQueue
 
 
@@ -59,7 +59,7 @@ def _clean_marathi_text(text: str) -> str:
 
 
 def _iter_text_pages(book_path: Path, fm: FileManager):
-    with fm.load_data(book_path, mode='r') as stream:
+    with fm.ensure_file(book_path, mode='r') as stream:
         for line in stream:
             yield DocRaw.model_validate_json(line).text
 
@@ -149,7 +149,7 @@ def run_pipeline(
                 tokenized_doc = tokenize_text(normalized_text_path, task.pdf_sha, worker_log, file_manager)
                 shard_relative_result = output_base_rel / get_shard_relative(task.pdf_sha, '.tok.json')
                 tokenized_json = tokenized_doc.model_dump_json(ensure_ascii=False)
-                with file_manager.load_data(shard_relative_result, mode='w') as stream:
+                with file_manager.ensure_file(shard_relative_result, mode='w') as stream:
                     stream.write(tokenized_json)
 
                 tokenize_sha = hashlib.sha256(tokenized_json.encode()).hexdigest()

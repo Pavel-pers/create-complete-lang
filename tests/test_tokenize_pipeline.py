@@ -50,7 +50,7 @@ if "psycopg" not in sys.modules:
 
 from cclang.common.logx import get_logger
 from cclang.config.s3 import S3Config
-from cclang.ingest.fs import get_shard_relative
+from cclang.io.fs import get_shard_relative
 from cclang.io.schemas import DocRaw, DocTok, PdfState, ProcessingStatus
 from pipelines.corpus import tokenize_text
 

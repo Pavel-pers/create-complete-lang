@@ -12,11 +12,11 @@ from pydantic import HttpUrl
 
 from cclang.common.logx import BoundLogger, get_logger, setup_logging
 from cclang.config.s3 import load_s3_config
-from cclang.ingest.fs import CloudConfig, FileManager, LocalConfig, ensure_relative, ensure_absolute, get_shard_relative
+from cclang.io.fs import CloudConfig, FileManager, LocalConfig, ensure_relative, ensure_absolute, get_shard_relative
 from cclang.ingest.net import download_file_to_temp
 from cclang.io.db import get_conn
 from cclang.io.fetched_items_store import FetchedItemsStore
-from cclang.io.manifest import ManifestStore
+from cclang.core.manifest import ManifestStore
 from cclang.io.schemas import FetchManifestRecord, SourcePDF
 from cclang.models.tasks_queue import TaskQueue
 

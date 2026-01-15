@@ -13,14 +13,14 @@ from dotenv import load_dotenv
 
 from cclang.common.logx import BoundLogger, setup_logging, get_logger
 from cclang.config.s3 import load_s3_config
-from cclang.ingest import fs
-from cclang.ingest.fs import LocalConfig, CloudConfig, ensure_relative
+from cclang.io import fs
+from cclang.io.fs import LocalConfig, CloudConfig, ensure_relative
 from cclang.io.db import get_conn
-from cclang.io.manifest import ManifestStore
+from cclang.core.manifest import ManifestStore
 from cclang.io.pdf_state_store import PdfStateStore
 from cclang.io.schemas import PdfState, ProcessingStatus, ProcessedPdfManifestRecord, DocRaw
 from cclang.models.tasks_queue import TaskQueue
-from cclang.ingest.fs import FileManager, get_shard_relative
+from cclang.io.fs import FileManager, get_shard_relative
 
 OCR_DPI = 300
 POPPLER_TIMEOUT_SECONDS = 120
@@ -89,7 +89,7 @@ def extract_text_from_pdf_to_temp(pdf_path: Path,
     temp_dist = fm.create_temp_file(".jsonl.part")
     try:
         temp_dist.parent.mkdir(parents=True, exist_ok=True)
-        with fm.load_data(pdf_path, mode='rb') as pdf_file:
+        with fm.ensure_file(pdf_path, mode='rb') as pdf_file:
             pdf_local_path = Path(pdf_file.name)
 
             with open(temp_dist, "w", encoding="utf-8", newline='') as stream:

@@ -8,7 +8,7 @@ import requests
 from requests.exceptions import RequestException
 
 from cclang.common import logx
-from cclang.ingest import fs
+from cclang.io import fs
 
 net_logger = logx.get_logger("cclang.net")
 

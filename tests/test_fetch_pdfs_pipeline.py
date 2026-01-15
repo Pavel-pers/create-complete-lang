@@ -5,7 +5,7 @@ from pathlib import Path
 from cclang.common.logx import get_logger
 from cclang.ingest.net import DownloadResult
 from cclang.io.schemas import SourcePDF
-from cclang.ingest.fs import get_shard_path
+from cclang.io.fs import get_shard_path
 from pipelines.corpus.fetch_pdfs import run_pipeline
 
 
