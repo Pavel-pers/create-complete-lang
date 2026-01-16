@@ -3,9 +3,10 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import os
+import typing
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TextIO
 
 from cclang.io.exceptions import LocalStorageError
 
@@ -109,33 +110,10 @@ class FileManager:
             return relative_path
         return self.local_cfg.base_path / relative_path
 
-    def mkdir(self, path: str | Path, treat_as_file: Optional[bool] = None) -> Path:
-        """
-        Behavior:
-        - If `treat_as_file` is None (default): the function tries to guess:
-            * if the path has a suffix (e.g. ".txt", ".pdf") -> treated as file path
-            * otherwise -> treated as directory path
-
-        Returns:
-            Path to the directory that was created (or already existed).
-        """
-        p = Path(path)
-
-        if treat_as_file is True:
-            # Force: always treat the path as a file path
-            target_dir = p.parent
-        elif treat_as_file is False:
-            # Force: always treat the path as a directory path
-            target_dir = p
-        else:
-            # Auto-detect: if there is a suffix, assume it's a file path
-            # Otherwise assume it's a directory path
-            target_dir = p if p.suffix == "" else p.parent
-
-        # Create the directory and all missing parents; do nothing if it already exists
-        target_dir.mkdir(parents=True, exist_ok=True)
-
-        return target_dir
+    def mkdir(self, relative_path: str | Path) -> Path:
+        path = self.resolve_local(relative_path)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     def exists(self, relative_path: Path) -> bool:
         return self.resolve_local(relative_path).exists()
@@ -147,6 +125,13 @@ class FileManager:
             local_path.touch()
             return local_path
         return local_path
+
+    def open(self, relative_path: Path, mode: str = "r", **kwargs) -> typing.IO:
+        local_path = self.resolve_local(relative_path)
+        is_write_mode = any(flag in mode for flag in ("w", "a", "+", "x"))
+        if not is_write_mode and not self.exists(local_path):
+            raise FileNotFoundError(f"File not found: {local_path}")
+        return self.ensure_file(relative_path).open(mode=mode, **kwargs)
 
     def close(self):
         pass
