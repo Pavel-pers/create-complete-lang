@@ -54,7 +54,7 @@ def test_upload_retries_on_connection_error(monkeypatch, tmp_path: Path):
         _make_cfg(),
         max_upload_threads=0,
         upload_max_attempts=3,
-        upload_base_backoff=0,
+        cloud_base_backoff=0,
     )
 
     cb = _Cb()
@@ -89,7 +89,7 @@ def test_upload_does_not_retry_on_client_error(monkeypatch, tmp_path: Path):
         _make_cfg(),
         max_upload_threads=0,
         upload_max_attempts=5,
-        upload_base_backoff=0,
+        cloud_base_backoff=0,
     )
 
     cb = _Cb()
@@ -113,7 +113,7 @@ def test_async_upload_invokes_callback(monkeypatch, tmp_path: Path):
         _make_cfg(),
         max_upload_threads=1,
         upload_max_attempts=1,
-        upload_base_backoff=0,
+        cloud_base_backoff=0,
     )
 
     cb = _Cb()

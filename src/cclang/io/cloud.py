@@ -131,12 +131,12 @@ class S3Store:
             max_upload_threads: int = 8,
             max_download_threads: int = 0,
             cloud_max_attempts: int = 4,
-            upload_base_backoff: float = 0.5,
+            cloud_base_backoff: float = 0.5,
             max_pool_connections: int | None = None,
     ):
         if not cfg.enable:
             raise ValueError("S3 store is disabled")
-        self.cfg = cfg
+        self._cfg = cfg
 
         pool_connections = max_pool_connections
         if pool_connections is None:
@@ -155,26 +155,25 @@ class S3Store:
             )
         )
 
-        self.transfer_manifest = transfer_manifest
+        self._transfer_manifest = transfer_manifest
         self.cloud_max_attempts = max(cloud_max_attempts, 1)
-        self.cloud_base_backoff = max(upload_base_backoff, 0.0)
+        self.cloud_base_backoff = max(cloud_base_backoff, 0.0)
         self.max_pool_connections = pool_connections
-        self.max_upload_threads = max_upload_threads
 
-        self.upload_queue: Optional[Queue[S3Job]] = None
-        self.download_queue: Optional[Queue[S3Job]] = None
-        self.upload_threads: List[threading.Thread] = []
-        self.download_threads: List[threading.Thread] = []
+        self._upload_queue: Optional[Queue[S3Job]] = None
+        self._download_queue: Optional[Queue[S3Job]] = None
+        self._upload_threads: List[threading.Thread] = []
+        self._download_threads: List[threading.Thread] = []
 
         if max_upload_threads > 0:
-            self.upload_queue = Queue()
-            self.upload_threads = [
+            self._upload_queue = Queue()
+            self._upload_threads = [
                 threading.Thread(target=self._upload_worker,
                                  args=(logger.bind(worker=f'upload_worker_{idx}'),),
                                  daemon=False)
                 for idx in range(max_upload_threads)
             ]
-            for thread in self.upload_threads:
+            for thread in self._upload_threads:
                 thread.start()
 
         if max_download_threads > 0:
@@ -182,7 +181,7 @@ class S3Store:
 
     def _update_job_status(self, job: S3Job, status: UploadStatus):
         try:
-            self.transfer_manifest.mark(
+            self._transfer_manifest.mark(
                 UploadManifestRecord(
                     local_path=job.mapping.loc_path,
                     cloud_key=job.mapping.cloud_key,
@@ -197,7 +196,7 @@ class S3Store:
     def _to_key(self, relative: Path) -> str:
         """Build S3 object key from a relative path and root_prefix."""
         relative_raw = PurePosixPath(relative.as_posix().lstrip("/"))
-        prefix_raw = self.cfg.root_prefix.as_posix().strip("/")
+        prefix_raw = self._cfg.root_prefix.as_posix().strip("/")
         if prefix_raw and prefix_raw != ".":
             return str(PurePosixPath(prefix_raw) / relative_raw)
         return relative_raw.as_posix()
@@ -206,7 +205,7 @@ class S3Store:
         """Return True if the object exists in the bucket."""
         key = self._to_key(relative_key)
         try:
-            self.client.head_object(Bucket=self.cfg.bucket, Key=key)
+            self.client.head_object(Bucket=self._cfg.bucket, Key=key)
             return True
         except ClientError as e:
             if e.response["Error"]["Code"] in ("404", "NoSuchKey"):
@@ -292,7 +291,7 @@ class S3Store:
         local_path = upload_job.mapping.loc_path
 
         def upload_action() -> None:
-            self.client.upload_file(str(local_path), self.cfg.bucket, cloud_key)
+            self.client.upload_file(str(local_path), self._cfg.bucket, cloud_key)
 
         return self._run_job_with_retries(upload_job,
                                           action=upload_action,
@@ -304,12 +303,12 @@ class S3Store:
         """Background worker that drains the queue and processes uploads."""
         while True:
             try:
-                job_item = self.upload_queue.get(timeout=10)
+                job_item = self._upload_queue.get(timeout=10)
             except Empty:
                 continue
 
             if job_item is None:
-                self.upload_queue.task_done()
+                self._upload_queue.task_done()
                 break
 
             self._update_job_status(job_item, UploadStatus.STARTED)
@@ -321,7 +320,7 @@ class S3Store:
             else:
                 self._update_job_status(job_item, UploadStatus.FAILED)
 
-            self.upload_queue.task_done()
+            self._upload_queue.task_done()
 
     def _do_download_job(self, download_job: S3Job) -> _JobResult:
         """
@@ -339,7 +338,7 @@ class S3Store:
         part_path = local_path.with_name(local_path.name + ".part")
 
         def download_action() -> None:
-            self.client.download_file(self.cfg.bucket, cloud_key, str(part_path))
+            self.client.download_file(self._cfg.bucket, cloud_key, str(part_path))
             part_path.replace(local_path)
 
         result = self._run_job_with_retries(download_job,
@@ -396,11 +395,11 @@ class S3Store:
             self._update_job_status(upload_job, UploadStatus.FAILED)
             raise CloudUploadError(f"Blocking upload failed: {local_path} -> {relative_key}") from result.exc
         else:
-            if self.upload_queue is None:
+            if self._upload_queue is None:
                 raise RuntimeError("Async upload not enabled")
 
             self._update_job_status(upload_job, UploadStatus.QUEUED)
-            self.upload_queue.put(upload_job)
+            self._upload_queue.put(upload_job)
 
     def download(self, relative_key: Path, local_path: Path, blocking: bool = True,
                  callback: S3JobCallback = None) -> None:
@@ -444,10 +443,10 @@ class S3Store:
 
     def close(self):
         """Drain the upload queue and stop worker threads."""
-        if self.upload_queue is None or self.upload_threads is None:
+        if self._upload_queue is None or self._upload_threads is None:
             return
-        for _ in self.upload_threads:
-            self.upload_queue.put(None)
-        self.upload_queue.join()
-        for thread in self.upload_threads:
+        for _ in self._upload_threads:
+            self._upload_queue.put(None)
+        self._upload_queue.join()
+        for thread in self._upload_threads:
             thread.join()
