@@ -10,8 +10,8 @@ from typing import Optional, TextIO
 
 from cclang.io.exceptions import LocalStorageError
 
-def normalize_windows_path(self) -> Path:
-    raw_path = str(self._relative_path)
+def normalize_windows_path(relative_path) -> Path:
+    raw_path = str(relative_path)
     if not Path(raw_path).is_absolute():
         raw_path = raw_path.replace("\\", "/")
     return Path(raw_path)
@@ -29,13 +29,12 @@ def ensure_absolute(path: Path, base: Path) -> Path:
     """Return the absolute path rooted at base when input is relative."""
     if path.is_absolute():
         return path
-    if path.parts and path.parts[0] == base.name:
-        path = Path(*path.parts[1:])
     return base / path
 
 def create_temp_file(base_path: Path, suff: str) -> Path:
     base_path.mkdir(parents=True, exist_ok=True)
     name = str(uuid.uuid4()) + suff
+    (base_path / name).touch()
     return base_path / name
 
 
@@ -108,7 +107,11 @@ class FileManager:
     def resolve_local(self, relative_path: Path) -> Path:
         if relative_path.is_relative_to(self.local_cfg.base_path):
             return relative_path
-        return self.local_cfg.base_path / relative_path
+        final_path = (self.local_cfg.base_path / relative_path).resolve()
+        if final_path.is_relative_to(self.local_cfg.base_path):
+            return final_path
+        else:
+            raise ValueError(f"Path {relative_path} is not inside data base path {self.local_cfg.base_path}")
 
     def mkdir(self, relative_path: str | Path) -> Path:
         path = self.resolve_local(relative_path)
@@ -132,6 +135,28 @@ class FileManager:
         if not is_write_mode and not self.exists(local_path):
             raise FileNotFoundError(f"File not found: {local_path}")
         return self.ensure_file(relative_path).open(mode=mode, **kwargs)
+
+    def finalize_artifact(self, temp_path: Path, dest_path: Path):
+        """
+        Finalizes the artifact by moving a temporary file to the destination path. It first ensures
+        that the parent directory of the destination path exists by creating it if necessary.
+        Then, it performs an atomic move operation from the temporary file to the resolved
+        destination path.
+
+        :param temp_path: The *absolute* path to the temporary file to be moved.
+        :param dest_path: The destination path where the artifact will be stored, of type Path.
+        :return: None
+        """
+        try:
+            self.mkdir(dest_path.parent)
+        except OSError as exc:
+            raise LocalStorageError(f"Failed to create dir '{dest_path.parent}'") from exc
+
+        try:
+            atomic_move(temp_path, self.resolve_local(dest_path))
+        except OSError as exc:
+            raise LocalStorageError(f"Failed to move file '{temp_path}' to '{dest_path}'") from exc
+
 
     def close(self):
         pass
