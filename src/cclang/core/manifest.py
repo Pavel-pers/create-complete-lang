@@ -44,8 +44,6 @@ class ManifestStore(Generic[ManifestRecord]):
         with self._lock:
             # Ensure manifest file exists locally so FileManager can open it for append.
             resolved_manifest_path = self._fm.resolve_local(self._manifest_rel_path)
-            self._fm.mkdir(self._manifest_rel_path.parent)
-            resolved_manifest_path.touch(exist_ok=True)
             with self._fm.open(self._manifest_rel_path, mode="a", encoding='utf-8') as f:
                 for record in self._buffer:
                     payload = record.model_dump(mode="json")
@@ -61,7 +59,8 @@ class ManifestStore(Generic[ManifestRecord]):
                 self.flush()
 
     def items(self):
-        return self._items.values()
+        with self._lock:
+            return list(self._items.values())
 
     def get(self, record_id)->ManifestRecord:
         return self._items.get(record_id)
