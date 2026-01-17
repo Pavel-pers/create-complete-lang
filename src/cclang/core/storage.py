@@ -1,24 +1,40 @@
 import dataclasses
 from os import unlink
 from pathlib import Path
-from typing import Optional, Type, TypeVar, IO
+from typing import Optional, Type, TypeVar, IO, Dict
 
 from pydantic import BaseModel
 
+from cclang.common import logx
 from cclang.config.s3 import S3Config
 from cclang.core.manifest import ManifestStore
 from cclang.io.exceptions import LocalStorageError
-from cclang.io.fs import FileManager, LocalConfig, normalize_windows_path, ensure_relative
-from cclang.io.cloud import S3Store, S3JobCallback
+from cclang.io.fs import FileManager, LocalConfig, normalize_windows_path, ensure_relative, atomic_move
+from cclang.io.cloud import S3Store, S3JobCallback, DefaultUploadCallback, S3Mapping
 from cclang.io.schemas import UploadManifestRecord
 
+logger = logx.get_logger(__name__)
 
 class StorageManagerError(Exception):
     """Base exception for storage-related errors."""
 
 
-ManifestRecordsType = TypeVar("T", bound=BaseModel)
+class ErasingUploadCallback(DefaultUploadCallback):
+    def __init__(self, data_to_erase: Path) -> None:
+        super().__init__()
+        self.data_to_erase = data_to_erase
 
+    def on_success(self, mapping: S3Mapping, extra: Optional[Dict] = None) -> None:
+        super().on_success(mapping, extra)
+        try:
+            unlink(self.data_to_erase)
+        except FileNotFoundError:
+            pass  # already erased
+        except OSError as exc:
+            logger.warning(f"Memory Leak: Failed to remove temporary file {self.data_to_erase!s}")
+
+
+ManifestRecordsType = TypeVar("T", bound=BaseModel)
 
 @dataclasses.dataclass
 class CloudConfig:
@@ -206,7 +222,8 @@ class StorageManager:
                     # this is a good case, file not leaking
                     pass
                 except OSError as exc:
-                    # this is a bad case, memory leaking, maybe log it in future
+                    # this is a bad case, memory leaking, log it
+                    logger.warning(f"Memory Leak: Couldn't delete temporary file: {self._local_path}")
                     pass
 
             # * Save changes to the cloud
@@ -220,7 +237,8 @@ class StorageManager:
                             # this is a good case, file not leaking
                             pass
                         except OSError as exc:
-                            # this is a bad case, memory is leaking, maybe log it in future
+                            # this is a bad case, memory is leaking, log it
+                            logger.warning(f"Memory Leak: Couldn't delete temporary file: {self._local_path}")
                             pass
 
             return False
@@ -240,7 +258,6 @@ class StorageManager:
         If call is non-blocking, not guaranteed that will succeed, cloud error will be reported in logs
         :return:
         """
-        raise RuntimeError('Not implemented yet')
         if not temp_path.exists():
             raise FileNotFoundError(f"Temp file {temp_path} does not exist")
         if not self.save_local_enabled() and not self.save_cloud_enabled():
@@ -250,18 +267,48 @@ class StorageManager:
         relative_path = ensure_relative(dest_path, self._file_manager.local_cfg.base_path, label='collecting data path')
 
         # * local move
-        pass
+        if self.save_local_enabled():
+            self._file_manager.finalize_artifact(temp_path, dest_path)
+            source_path = self._file_manager.resolve_local(dest_path)
+        else:
+            source_path = temp_path
+
+        # * cloud upload
+        if self.save_cloud_enabled():
+            upload_callback = DefaultUploadCallback()
+            # if the call is async, and we must erase local data, erase it in callback
+            if not self.save_local_enabled() and not blocking:
+                upload_callback = ErasingUploadCallback(source_path)
+
+            self._cloud.upload(source_path, relative_key=relative_path, callback=upload_callback, blocking=blocking)
+
+        # * erasing temp data
+        # * if a call is blocking, and we don't save local data, erase it after upload
+        # * because we can raise an exception, we don't use callbacks in a step before
+        if not self.save_local_enabled() and blocking:
+            try:
+                unlink(source_path)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                logger.warning(f"Memory Leak: Failed to remove temporary file {source_path!s}")
+
+    def close(self) -> None:
+        if self._cloud is not None:
+            self._cloud.close()
+            self._cloud = None
+
+    def _exists_local(self, path: Path):
+        self._file_manager.exists(path)
 
 
-def _exists_local(self, path: Path):
-    self._file_manager.exists(path)
+    def _exists_cloud(self, key: Path):
+        if self._cloud is None:
+            return False
+        return self._cloud.exists(key)
 
+    def exists(self, path: Path) -> bool:
+        return self._exists_local(path) or self._exists_cloud(path)
 
-def _exists_cloud(self, key: Path):
-    if self._cloud is None:
-        return False
-    return self._cloud.exists(key)
-
-
-def exists(self, path: Path) -> bool:
-    return self._exists_local(path) or self._exists_cloud(path)
+    def create_temp_file(self, suffix: str = "") -> Path:
+        return self._file_manager.create_temp_file(suffix)

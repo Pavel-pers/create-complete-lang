@@ -1,5 +1,6 @@
 """S3-backed object store with optional async uploads, retries, and configurable connection pooling."""
 import logging
+import posixpath
 import random
 import threading
 import time
@@ -48,7 +49,7 @@ class CloudDownloadError(CloudStoreError):
 @dataclass
 class S3Mapping:
     loc_path: Path
-    cloud_key: Path
+    cloud_key: str
 
 
 class S3JobCallback(ABC):
@@ -72,12 +73,11 @@ class S3Job:
     mapping: S3Mapping
     callback: S3JobCallback
 
-
 @dataclass
 class _JobResult:
     ok: bool
-    exc: Optional[Exception]
-    retryable: Optional[bool]
+    exc: Optional[Exception] = None
+    retryable: Optional[bool] = None
 
 
 class DefaultUploadCallback(S3JobCallback):
@@ -160,8 +160,8 @@ class S3Store:
         self.cloud_base_backoff = max(cloud_base_backoff, 0.0)
         self.max_pool_connections = pool_connections
 
-        self._upload_queue: Optional[Queue[S3Job]] = None
-        self._download_queue: Optional[Queue[S3Job]] = None
+        self._upload_queue: Optional[Queue[S3Job | None]] = None
+        self._download_queue: Optional[Queue[S3Job | None]] = None
         self._upload_threads: List[threading.Thread] = []
         self._download_threads: List[threading.Thread] = []
 
@@ -192,14 +192,27 @@ class S3Store:
                              extra={"status": str(status),
                                     "local_path": str(job.mapping.loc_path),
                                     "cloud_key": str(job.mapping.cloud_key)})
-
     def _to_key(self, relative: Path) -> str:
-        """Build S3 object key from a relative path and root_prefix."""
-        relative_raw = PurePosixPath(relative.as_posix().lstrip("/"))
-        prefix_raw = self._cfg.root_prefix.as_posix().strip("/")
-        if prefix_raw and prefix_raw != ".":
-            return str(PurePosixPath(prefix_raw) / relative_raw)
-        return relative_raw.as_posix()
+        """
+        Build S3 object key from a relative path and root_prefix.
+        Normalizes paths to avoid duplicate slashes and handles empty prefixes correctly.
+        """
+        relative_posix = relative.as_posix().lstrip("/")
+        prefix = self._cfg.root_prefix.as_posix().strip("/")
+
+        if not prefix or prefix == ".":
+            full_path = relative_posix
+        else:
+            full_path = posixpath.join(prefix, relative_posix)
+
+        normalized_path = posixpath.normpath(full_path)
+        normalized_path = normalized_path.strip("/")
+
+        if not normalized_path:
+            return ""
+        if normalized_path.startswith(".."):
+            raise ValueError(f"Invalid path that escapes root prefix: {relative}")
+        return normalized_path
 
     def exists(self, relative_key: Path) -> bool:
         """Return True if the object exists in the bucket."""
@@ -287,7 +300,7 @@ class S3Store:
         :param upload_job:
         :return: True if upload succeeded, False otherwise.
         """
-        cloud_key = self._to_key(upload_job.mapping.cloud_key)
+        cloud_key = upload_job.mapping.cloud_key
         local_path = upload_job.mapping.loc_path
 
         def upload_action() -> None:
@@ -331,15 +344,19 @@ class S3Store:
         :return: A boolean indicating the success or failure of the download operation.
         :rtype: bool
         """
-        cloud_key = self._to_key(download_job.mapping.cloud_key)
+        cloud_key = download_job.mapping.cloud_key
         local_path = download_job.mapping.loc_path
 
         local_path.parent.mkdir(parents=True, exist_ok=True)
         part_path = local_path.with_name(local_path.name + ".part")
 
         def download_action() -> None:
-            self.client.download_file(self._cfg.bucket, cloud_key, str(part_path))
-            part_path.replace(local_path)
+            try:
+                self.client.download_file(self._cfg.bucket, cloud_key, str(part_path))
+                part_path.replace(local_path)
+            finally:
+                if part_path.exists():
+                    part_path.unlink()
 
         result = self._run_job_with_retries(download_job,
                                             action=download_action,
@@ -381,7 +398,8 @@ class S3Store:
         if callback is None:
             callback = DefaultUploadCallback()
 
-        upload_job = S3Job(S3Mapping(loc_path=local_path, cloud_key=relative_key), callback)
+        abs_key = self._to_key(relative_key)
+        upload_job = S3Job(S3Mapping(loc_path=local_path, cloud_key=abs_key), callback)
 
         if blocking:
             self._update_job_status(upload_job, UploadStatus.STARTED)
@@ -391,7 +409,6 @@ class S3Store:
                 self._update_job_status(upload_job, UploadStatus.SUCCEDED)
                 return
 
-            err = str(result.exc)
             self._update_job_status(upload_job, UploadStatus.FAILED)
             raise CloudUploadError(f"Blocking upload failed: {local_path} -> {relative_key}") from result.exc
         else:
@@ -426,22 +443,20 @@ class S3Store:
         if callback is None:
             callback = DefaultDownloadCallback()
 
-        upload_job = S3Job(mapping=S3Mapping(loc_path=local_path, cloud_key=relative_key),
+        abs_key = self._to_key(relative_key)
+        download_job = S3Job(mapping=S3Mapping(loc_path=local_path, cloud_key=abs_key),
                            callback=callback)
 
         if blocking:
-            self._update_job_status(upload_job, UploadStatus.STARTED)
-            result = self._do_download_job(upload_job)
+            result = self._do_download_job(download_job)
             if result.ok:
-                self._update_job_status(upload_job, UploadStatus.SUCCEDED)
                 return
             err = str(result.exc)
-            self._update_job_status(upload_job, UploadStatus.FAILED)
             raise CloudDownloadError(f"Blocking download failed: {local_path} <- {relative_key}") from result.exc
         else:
             raise NotImplementedError('Async download is not yet supported')
 
-    def close(self):
+    def close(self, timeout: float = 30.0):
         """Drain the upload queue and stop worker threads."""
         if self._upload_queue is None or self._upload_threads is None:
             return
@@ -449,4 +464,6 @@ class S3Store:
             self._upload_queue.put(None)
         self._upload_queue.join()
         for thread in self._upload_threads:
-            thread.join()
+            thread.join(timeout=timeout)
+            if thread.is_alive():
+                logger.warning(f"Upload worker thread {thread.name} did not terminate in {timeout} seconds")
