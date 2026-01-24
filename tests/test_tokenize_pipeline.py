@@ -92,7 +92,7 @@ def test_run_pipeline_writes_output_and_updates_state(monkeypatch, tmp_path: Pat
         def __init__(self, _conn):
             self._closed = False
 
-        def filter_by_tokenize_status(self, _status):
+        def filter_by_status(self, text_status=None, tokenize_status=None):
             return tasks
 
         def update_tokenize_status(self, pdf_sha, tokenize_status, tokenize_sha, tokenize_path, ts):

@@ -309,14 +309,19 @@ class StorageManager:
     def _exists_local(self, path: Path) -> bool:
         return self._file_manager.exists(path)
 
-
-    def _exists_cloud(self, key: Path):
+    def exists_cloud(self, key: Path) -> bool:
         if self._cloud is None:
             return False
         return self._cloud.exists(key)
 
+    # private alias used internally by _LoadDataManager
+    _exists_cloud = exists_cloud
+
     def exists(self, path: Path) -> bool:
         return self._exists_local(path) or self._exists_cloud(path)
+
+    def resolve_local(self, relative_path: Path) -> Path:
+        return self._file_manager.resolve_local(relative_path)
 
     def create_temp_file(self, suffix: str = "") -> Path:
         return self._file_manager.create_temp_file(suffix)

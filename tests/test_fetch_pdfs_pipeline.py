@@ -80,9 +80,9 @@ def test_run_pipeline_reuses_existing_file_and_updates_db(monkeypatch, tmp_path:
     temp_file.parent.mkdir(parents=True, exist_ok=True)
     temp_file.write_bytes(file_bytes)
 
-    def fake_download(file_url: str, *, fm=None, download_folder=None):
+    def fake_download(file_url: str, *, sm=None, download_folder=None):
         assert file_url == url
-        assert fm is not None
+        assert sm is not None
         return DownloadResult(
             status=200,
             size_bytes=len(file_bytes),

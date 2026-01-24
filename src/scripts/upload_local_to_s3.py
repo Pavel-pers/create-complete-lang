@@ -7,23 +7,28 @@ import os
 import signal
 import threading
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Sequence, Optional, Dict
 
 from cclang.common import logx
 from cclang.config.s3 import S3Config, load_s3_config
-from cclang.io.fs import LocalConfig, CloudConfig, FileManager
-from cclang.io.cloud import UploadCallBack
+from cclang.core.storage import StorageManager, CloudConfig
+from cclang.io.fs import LocalConfig
+from cclang.io.cloud import S3JobCallback, S3Mapping
 
-class LoggingCallBack(UploadCallBack):
-    def __init__(self, key: str, logger: logx.BoundLogger):
-        self.logger = logger
-        self.key = key
 
-    def on_upload_succes(self):
-        self.logger.info(f"Key {self.key} uploaded successfully")
+class LoggingCallback(S3JobCallback):
+    def __init__(self, key: str, cb_logger: logx.BoundLogger):
+        self._logger = cb_logger
+        self._key = key
 
-    def on_upload_failed(self, exc_type, exc_value, traceback):
-        self.logger.exception(f"Failed to upload {self.key}", exc_info=(exc_type, exc_value, traceback))
+    def on_success(self, mapping: S3Mapping, extra: Optional[Dict] = None) -> None:
+        self._logger.info(f"Key {self._key} uploaded successfully")
+
+    def on_failed(self, mapping: S3Mapping, exc_type, exc_value, traceback, extra: Optional[Dict] = None) -> None:
+        self._logger.error(f"Failed to upload {self._key}", extra={"exc_type": str(exc_type), "exc_value": str(exc_value)})
+
+    def on_retry(self, mapping: S3Mapping, exc_type, exc_value, traceback, extra: Optional[Dict] = None) -> None:
+        self._logger.warning(f"Retrying upload {self._key}", extra={"exc_type": str(exc_type)})
 
 
 logger = logx.get_logger(__name__)
@@ -66,7 +71,6 @@ def _build_s3_config_from_env_and_args(args: argparse.Namespace) -> S3Config:
             "S3 region is not set. Use --region or env AWS_REGION"
         )
 
-
     config.access_key = args.access_key or config.access_key
     config.secret_key = args.secret_key or config.secret_key
     if not config.access_key or not config.secret_key:
@@ -76,15 +80,15 @@ def _build_s3_config_from_env_and_args(args: argparse.Namespace) -> S3Config:
         )
 
     config.root_prefix = config.root_prefix or args.root_prefix
-    if not config:
+    if not config.root_prefix:
         raise SystemExit(
             "Root Prefix is not set. Use --root-prefix or env CCLANG_S3_ROOT_PREFIX"
         )
     return config
 
 
-def _build_file_manager(args: argparse.Namespace) -> tuple[FileManager, Path]:
-    """Construct FileManager with local and cloud configuration."""
+def _build_storage_manager(args: argparse.Namespace) -> tuple[StorageManager, Path]:
+    """Construct StorageManager with local and cloud configuration."""
     data_path = _resolve_data_path(args.data_path)
     data_path.mkdir(parents=True, exist_ok=True)
 
@@ -103,14 +107,13 @@ def _build_file_manager(args: argparse.Namespace) -> tuple[FileManager, Path]:
 
     cloud_cfg = CloudConfig(
         enable=True,
-        base_path=Path(args.remote_base),  # prefix inside root_prefix in bucket, e.g. "data"
         s3_config=s3_cfg,
         max_upload_threads=upload_threads,
         max_pool_connections=max_pool_connections,
     )
 
-    fm = FileManager(local_cfg=local_cfg, cloud_cfg=cloud_cfg)
-    return fm, data_path
+    storage = StorageManager(local_cfg=local_cfg, cloud_cfg=cloud_cfg)
+    return storage, data_path
 
 
 def _iter_files(base: Path, subdirs: Sequence[str]) -> Iterable[Path]:
@@ -129,18 +132,16 @@ def _iter_files(base: Path, subdirs: Sequence[str]) -> Iterable[Path]:
 
 
 def _upload_one(
-        fm: FileManager,
+        storage: StorageManager,
         data_path: Path,
         local_path: Path,
         dry_run: bool,
         skip_existing: bool,
 ) -> None:
-    """
-    Upload a single file to S3, preserving the path relative to data_path.
-    """
+    """Upload a single file to S3, preserving the path relative to data_path."""
     relative = local_path.relative_to(data_path)
 
-    if skip_existing and fm.exists_cloud(relative):
+    if skip_existing and storage.exists_cloud(relative):
         logger.info("Skip existing in S3: %s", relative.as_posix())
         return
 
@@ -148,12 +149,9 @@ def _upload_one(
         logger.info("DRY RUN: would upload %s", relative.as_posix())
         return
 
-    if not fm.cloud:
-        raise RuntimeError("Cloud store is not enabled in FileManager")
-
     logger.info("Uploading %s", relative.as_posix())
-    log_cb = LoggingCallBack(relative.as_posix(), logger)
-    fm.cloud_upload(local_path, relative, blocking=False, callback=log_cb)
+    log_cb = LoggingCallback(relative.as_posix(), logger)
+    storage.push_data(relative, blocking=False, callback=log_cb)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -165,12 +163,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         "--data-path",
         type=str,
         help="Local data root (default: CCLANG_DATA_DIR)",
-    )
-    parser.add_argument(
-        "--remote-base",
-        type=str,
-        default="data",
-        help="Prefix inside S3 (relative to root_prefix), default 'data'",
     )
     parser.add_argument(
         "--upload-threads",
@@ -236,14 +228,10 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     dirs = args.dirs if args.dirs else list(DEFAULT_SUBDIRS)
 
-    fm, data_path = _build_file_manager(args)
+    storage, data_path = _build_storage_manager(args)
 
     logger.info("Data root: %s", data_path)
-    logger.info(
-        "Uploading subdirs: %s (remote base: %s)",
-        ", ".join(dirs),
-        fm.cloud_cfg.base_path.as_posix(),
-    )
+    logger.info("Uploading subdirs: %s", ", ".join(dirs))
 
     total = 0
     try:
@@ -252,7 +240,7 @@ def main(argv: Sequence[str] | None = None) -> None:
                 logger.info("Stop requested, cancelling remaining uploads")
                 break
             _upload_one(
-                fm=fm,
+                storage=storage,
                 data_path=data_path,
                 local_path=local_path,
                 dry_run=args.dry_run,
@@ -262,7 +250,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     except KeyboardInterrupt:
         logger.warning("Interrupted by user, stopping uploads")
     finally:
-        fm.close()
+        storage.close()
         logger.info("Done. Processed %d local files.", total)
 
 

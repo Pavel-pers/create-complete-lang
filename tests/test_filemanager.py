@@ -127,7 +127,8 @@ def test_open_write_mode_creates_parents(file_manager, base_path):
 
 def test_open_fails_for_missing_file_read_mode(file_manager):
     with pytest.raises(FileNotFoundError, match="File not found"):
-        file_manager.open(Path("missing.txt"), "r")
+        with file_manager.open(Path("missing.txt"), "r"):
+            pass
 
 def test_finalize_artifact(file_manager, base_path, temp_base):
     temp_base.mkdir()

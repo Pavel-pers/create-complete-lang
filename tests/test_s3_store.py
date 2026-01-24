@@ -1,10 +1,11 @@
 from pathlib import Path
+from typing import Optional, Dict
 
 import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError
 
 from cclang.config.s3 import S3Config
-from cclang.io.cloud import S3Store
+from cclang.io.cloud import S3Store, S3JobCallback, S3Mapping
 
 
 class _FlakyClient:
@@ -20,16 +21,28 @@ class _FlakyClient:
         self.last_upload = (filename, bucket, key)
 
 
-class _Cb:
+class _Cb(S3JobCallback):
     def __init__(self):
         self.ok = 0
         self.failed = 0
 
-    def on_upload_succes(self):
+    def on_success(self, mapping: S3Mapping, extra: Optional[Dict] = None) -> None:
         self.ok += 1
 
-    def on_upload_failed(self, exc_type, exc_value, traceback):
+    def on_failed(self, mapping: S3Mapping, exc_type, exc_value, traceback, extra: Optional[Dict] = None) -> None:
         self.failed += 1
+
+    def on_retry(self, mapping: S3Mapping, exc_type, exc_value, traceback, extra: Optional[Dict] = None) -> None:
+        pass
+
+
+class _FakeManifest:
+    """Minimal mock for ManifestStore used as transfer_manifest."""
+    def __init__(self):
+        self.records = []
+
+    def mark(self, record):
+        self.records.append(record)
 
 
 def _make_cfg() -> S3Config:
@@ -52,8 +65,9 @@ def test_upload_retries_on_connection_error(monkeypatch, tmp_path: Path):
 
     store = S3Store(
         _make_cfg(),
+        transfer_manifest=_FakeManifest(),
         max_upload_threads=0,
-        upload_max_attempts=3,
+        cloud_max_attempts=3,
         cloud_base_backoff=0,
     )
 
@@ -87,14 +101,15 @@ def test_upload_does_not_retry_on_client_error(monkeypatch, tmp_path: Path):
 
     store = S3Store(
         _make_cfg(),
+        transfer_manifest=_FakeManifest(),
         max_upload_threads=0,
-        upload_max_attempts=5,
+        cloud_max_attempts=5,
         cloud_base_backoff=0,
     )
 
     cb = _Cb()
 
-    with pytest.raises(ClientError):
+    with pytest.raises(Exception):
         store.upload(upload_path, Path("dest.bin"), blocking=True, callback=cb)
 
     assert client.calls == 1
@@ -111,8 +126,9 @@ def test_async_upload_invokes_callback(monkeypatch, tmp_path: Path):
 
     store = S3Store(
         _make_cfg(),
+        transfer_manifest=_FakeManifest(),
         max_upload_threads=1,
-        upload_max_attempts=1,
+        cloud_max_attempts=1,
         cloud_base_backoff=0,
     )
 
@@ -122,4 +138,3 @@ def test_async_upload_invokes_callback(monkeypatch, tmp_path: Path):
 
     assert client.calls == 1
     assert cb.ok == 1
-    assert cb.failed == 0

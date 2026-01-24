@@ -12,11 +12,11 @@ from pydantic import HttpUrl
 
 from cclang.common.logx import BoundLogger, get_logger, setup_logging
 from cclang.config.s3 import load_s3_config
-from cclang.io.fs import CloudConfig, FileManager, LocalConfig, ensure_relative, ensure_absolute, get_shard_relative
+from cclang.core.storage import StorageManager, CloudConfig
+from cclang.io.fs import LocalConfig, ensure_relative, get_shard_relative
 from cclang.ingest.net import download_file_to_temp
 from cclang.io.db import get_conn
 from cclang.io.fetched_items_store import FetchedItemsStore
-from cclang.core.manifest import ManifestStore
 from cclang.io.schemas import FetchManifestRecord, SourcePDF
 from cclang.models.tasks_queue import TaskQueue
 
@@ -47,27 +47,26 @@ def run_pipeline(
     data_path.mkdir(parents=True, exist_ok=True)
 
     output_base_rel = ensure_relative(Path(output_base_path), data_path, "output_base_path")
-    output_base_abs = data_path / output_base_rel
-    output_base_abs.mkdir(parents=True, exist_ok=True)
-
-    manifest_path_abs = ensure_absolute(Path(manifest_path), data_path)
-    manifest_path_abs.parent.mkdir(parents=True, exist_ok=True)
 
     db_conn = get_conn(database_dsn)
 
     s3_cfg = load_s3_config()
-    file_manager = FileManager(
+    storage = StorageManager(
         local_cfg=LocalConfig(
             base_path=data_path,
             save_local=True,
             cache_files=True,
             temp_base=data_path / "temp/downloads",
         ),
-        cloud_cfg=CloudConfig(enable=s3_cfg.enable, base_path=Path(""), s3_config=s3_cfg, max_upload_threads=8),
+        cloud_cfg=CloudConfig(
+            enable=s3_cfg.enable,
+            s3_config=s3_cfg,
+            max_upload_threads=8,
+        ),
     )
 
     fetched_items = FetchedItemsStore(db_conn)
-    manifest = ManifestStore(manifest_path_abs, FetchManifestRecord, file_manager)
+    manifest = storage.register_manifest(manifest_path, FetchManifestRecord)
 
     tasks = get_fetch_tasks(urls_path, max_count=max_count)
     tasks = list(filter(lambda task_: not fetched_items.has_url(task_), tasks))
@@ -95,11 +94,10 @@ def run_pipeline(
                     task_queue.task_done()
                     return
 
-                temp_result = download_file_to_temp(str(task_url), fm=file_manager)
+                temp_result = download_file_to_temp(str(task_url), sm=storage)
                 if temp_result.tmp_file is not None and temp_result.sha256:
                     cached_item = fetched_items.get_sha256(temp_result.sha256)
                     if cached_item is not None:
-                        # already have this file on disk, reuse and drop temp
                         temp_result.tmp_file.unlink(missing_ok=True)
                         worker_log.debug(
                             "file skipped",
@@ -118,11 +116,10 @@ def run_pipeline(
                         shard_relative = output_base_rel / get_shard_relative(
                             temp_result.sha256, '.pdf'
                         )
-                        new_result_path_abs = file_manager.resolve_local(shard_relative)
-                        if new_result_path_abs.exists():
+                        if storage.exists(shard_relative):
                             temp_result_path.unlink(missing_ok=True)
                         else:
-                            file_manager.collect_result(temp_result_path, shard_relative)
+                            storage.finalize_artifact(temp_result_path, shard_relative)
                         worker_log.debug(
                             "file downloaded",
                             extra={"url": task_url, "sha256": temp_result.sha256, "path": str(shard_relative)},
@@ -218,7 +215,7 @@ def run_pipeline(
         log.info("fetching pdfs completed, closing files")
         manifest.flush()
         fetched_items.close()
-        file_manager.close()
+        storage.close()
         log.info("files closed")
 
 
