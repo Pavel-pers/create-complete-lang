@@ -3,8 +3,6 @@ from dataclasses import dataclass
 from pathlib import Path
 import os
 
-from contourpy import max_threads
-
 
 @dataclass
 class S3Config:

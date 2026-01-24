@@ -50,7 +50,7 @@ if "psycopg" not in sys.modules:
 
 from cclang.common.logx import get_logger
 from cclang.config.s3 import S3Config
-from cclang.ingest.fs import get_shard_relative
+from cclang.io.fs import get_shard_relative
 from cclang.io.schemas import DocRaw, DocTok, PdfState, ProcessingStatus
 from pipelines.corpus import tokenize_text
 
@@ -92,7 +92,7 @@ def test_run_pipeline_writes_output_and_updates_state(monkeypatch, tmp_path: Pat
         def __init__(self, _conn):
             self._closed = False
 
-        def filter_by_tokenize_status(self, _status):
+        def filter_by_status(self, text_status=None, tokenize_status=None):
             return tasks
 
         def update_tokenize_status(self, pdf_sha, tokenize_status, tokenize_sha, tokenize_path, ts):
