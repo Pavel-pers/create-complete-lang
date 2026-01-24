@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from idlelib.pathbrowser import PathBrowser
+from pathlib import Path
 from typing import ClassVar, Dict, List, Optional
 from enum import Enum
 from pydantic import BaseModel, Field, HttpUrl

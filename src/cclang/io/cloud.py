@@ -20,6 +20,7 @@ from botocore.exceptions import (
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+from cclang.io.fs import calculate_sha256
 from cclang.io.schemas import UploadStatus, UploadManifestRecord
 from cclang.core.manifest import ManifestStore
 from cclang.common import logx
@@ -306,11 +307,14 @@ class S3Store:
         def upload_action() -> None:
             self.client.upload_file(str(local_path), self._cfg.bucket, cloud_key)
 
-        return self._run_job_with_retries(upload_job,
+
+        result = self._run_job_with_retries(upload_job,
                                           action=upload_action,
                                           retryable_errors=_RETRYABLE_CLOUD_ERRORS,
                                           max_attempts=self.cloud_max_attempts,
                                           base_backoff=self.cloud_base_backoff, )
+        return result
+
 
     def _upload_worker(self, worker_logger: logx.BoundLogger) -> None:
         """Background worker that drains the queue and processes uploads."""

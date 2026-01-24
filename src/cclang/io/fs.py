@@ -3,18 +3,21 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import os
-import typing
+import threading
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional, TextIO
+from typing import Optional, TextIO, Dict
 
 from cclang.io.exceptions import LocalStorageError
+
 
 def normalize_windows_path(relative_path) -> Path:
     raw_path = str(relative_path)
     if not Path(raw_path).is_absolute():
         raw_path = raw_path.replace("\\", "/")
     return Path(raw_path)
+
 
 def ensure_relative(path: Path, base: Path, label: str) -> Path:
     """Convert absolute path to relative to base; accept already-relative paths."""
@@ -25,11 +28,13 @@ def ensure_relative(path: Path, base: Path, label: str) -> Path:
             raise ValueError(f"{label} must be inside data base path {base}") from exc
     return path
 
+
 def ensure_absolute(path: Path, base: Path) -> Path:
     """Return the absolute path rooted at base when input is relative."""
     if path.is_absolute():
         return path
     return base / path
+
 
 def create_temp_file(base_path: Path, suff: str) -> Path:
     base_path.mkdir(parents=True, exist_ok=True)
@@ -81,8 +86,12 @@ class LocalConfig:
 class FileManager:
     """Handles sharded local paths and optional S3 mirroring."""
 
-    def __init__(self, local_cfg: LocalConfig):
+    def __init__(self, local_cfg: LocalConfig, max_locks: int = 1000):
         self.local_cfg = local_cfg
+        self._locks: Dict[Path, threading.Lock] = {}
+        self._locks_lock = threading.Lock()
+        self._max_locks = max_locks
+        self._operation_count = 0
 
     def _relative_to_local_base(self, path: Path) -> Path:
         """
@@ -92,6 +101,29 @@ class FileManager:
         Relative paths are returned as is.
         """
         return ensure_relative(path, self.local_cfg.base_path, "data file")
+
+    def _get_lock(self, path: Path) -> threading.Lock:
+        """Get or create a lock for the given path with automatic cleanup."""
+        with self._locks_lock:
+            # Get or create lock
+            if path not in self._locks:
+                self._locks[path] = threading.Lock()
+
+                # Clenup after 1000 operations
+                self._operation_count += 1
+                if self._operation_count >= 1000:
+                    self._operation_count = 0
+                    if len(self._locks) > self._max_locks:
+                        self._cleanup_locks()
+
+            return self._locks[path]
+
+    def _cleanup_locks(self):
+        """Remove not used locks when limit exceeded.
+        """
+        keys_to_remove = [key for key, lock in self._locks.items() if not lock.locked()]
+        for key in keys_to_remove:
+            del self._locks[key]
 
     def create_temp_file(self, suffix: str = "") -> Path:
         try:
@@ -108,7 +140,9 @@ class FileManager:
         if relative_path.is_relative_to(self.local_cfg.base_path):
             return relative_path
         final_path = (self.local_cfg.base_path / relative_path).resolve()
-        if final_path.is_relative_to(self.local_cfg.base_path):
+        # Resolve base_path too for correct comparison
+        base_path_resolved = self.local_cfg.base_path.resolve()
+        if final_path.is_relative_to(base_path_resolved):
             return final_path
         else:
             raise ValueError(f"Path {relative_path} is not inside data base path {self.local_cfg.base_path}")
@@ -119,22 +153,37 @@ class FileManager:
         return path
 
     def exists(self, relative_path: Path) -> bool:
+        local_path = self.resolve_local(relative_path)
+        with self._get_lock(local_path):
+            return self.resolve_local(relative_path).exists()
+
+    def _exists_logic(self, relative_path: Path) -> bool:
         return self.resolve_local(relative_path).exists()
 
     def ensure_file(self, relative_path: Path) -> Path:
         local_path = self.resolve_local(relative_path)
-        if not self.exists(relative_path):
-            local_path.parent.mkdir(parents=True, exist_ok=True)
-            local_path.touch()
+        with self._get_lock(local_path):
+            if not self._exists_logic(relative_path):
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+                local_path.touch()
+                return local_path
             return local_path
-        return local_path
 
-    def open(self, relative_path: Path, mode: str = "r", **kwargs) -> typing.IO:
+    @contextmanager
+    def open(self, relative_path: Path, mode: str = "r", **kwargs):
         local_path = self.resolve_local(relative_path)
         is_write_mode = any(flag in mode for flag in ("w", "a", "+", "x"))
+
         if not is_write_mode and not self.exists(local_path):
             raise FileNotFoundError(f"File not found: {local_path}")
-        return self.ensure_file(relative_path).open(mode=mode, **kwargs)
+
+        work_file = self.ensure_file(relative_path)
+        self._get_lock(local_path).acquire()
+        try:
+            with work_file.open(mode=mode, **kwargs) as f:
+                yield f
+        finally:
+            self._get_lock(local_path).release()
 
     def finalize_artifact(self, temp_path: Path, dest_path: Path):
         """
@@ -147,16 +196,16 @@ class FileManager:
         :param dest_path: The destination path where the artifact will be stored, of type Path.
         :return: None
         """
-        try:
-            self.mkdir(dest_path.parent)
-        except OSError as exc:
-            raise LocalStorageError(f"Failed to create dir '{dest_path.parent}'") from exc
+        with self._get_lock(dest_path):
+            try:
+                self.mkdir(dest_path.parent)
+            except OSError as exc:
+                raise LocalStorageError(f"Failed to create dir '{dest_path.parent}'") from exc
 
-        try:
-            atomic_move(temp_path, self.resolve_local(dest_path))
-        except OSError as exc:
-            raise LocalStorageError(f"Failed to move file '{temp_path}' to '{dest_path}'") from exc
-
+            try:
+                atomic_move(temp_path, self.resolve_local(dest_path))
+            except OSError as exc:
+                raise LocalStorageError(f"Failed to move file '{temp_path}' to '{dest_path}'") from exc
 
     def close(self):
         pass

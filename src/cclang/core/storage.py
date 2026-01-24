@@ -55,7 +55,7 @@ class StorageManager:
         self._manifests: dict[str, ManifestStore[BaseModel]] = {}
         transfer_manifest = self._init_transfer_manifest()
         # cloud setup
-        self._cloud = Optional[S3Store]
+        self._cloud: Optional[S3Store] = None
         self.cloud_cfg = cloud_cfg
         if self.cloud_cfg.enable:
             self._cloud = S3Store(
@@ -93,16 +93,23 @@ class StorageManager:
         self._manifests[str(manifest_name)] = manifest
         return manifest
 
-    def push_data(self, data_path: Path, blocking=True) -> None:
+    def push_data(self, data_path: Path, blocking=True, callback: S3JobCallback | None = None) -> None:
         """
         Push local data to S3, override if exists.
         If call is non-blocking, not guaranteed that will succeed, cloud error will be reported in logs
         :param data_path: path to local data, realative or absolute in local base
         :param blocking: if True call is blocking until all data is pushed, otherwise it will return immediately
+        :param callback: optional callback to execute after upload is finished
         :return:
         """
+        if self._cloud is None:
+            raise StorageManagerError("Cannot push data: cloud storage is not enabled")
+
         relative_path = ensure_relative(data_path, self._file_manager.local_cfg.base_path, label='pushed data path')
-        self._cloud.upload(self._file_manager.resolve_local(data_path), relative_key=relative_path, blocking=blocking)
+        self._cloud.upload(self._file_manager.resolve_local(data_path),
+                           relative_key=relative_path,
+                           blocking=blocking,
+                           callback=callback)
 
     def push_manifest(self, manifest_name: Optional[str] = None):
         """
@@ -188,7 +195,8 @@ class StorageManager:
                 except OSError as exc:
                     raise LocalStorageError(f"Failed to create file '{path}'") from exc
 
-                self._is_temporary = False
+                # Mark as temporary if we won't save locally (will be deleted after cloud upload)
+                self._is_temporary = not self._sm.save_local_enabled()
                 return data_path
 
             raise FileNotFoundError(f"File not found neither localy nor in cloud: '{path}'")
@@ -227,9 +235,10 @@ class StorageManager:
                     pass
 
             # * Save changes to the cloud
-            if exc_type is not None and self._is_write_mode:
+            if exc_type is None and self._is_write_mode:
                 if self._sm.save_cloud_enabled():
-                    self._sm.push_data(self._local_path, blocking=True)
+                    # Use relative path for push_data to avoid path resolution issues
+                    self._sm.push_data(self._relative_path, blocking=True)
                     if not self._sm.save_local_enabled():
                         try:
                             unlink(self._local_path)
@@ -251,7 +260,6 @@ class StorageManager:
             temp_path: Path,
             dest_path: Path,
             blocking: bool = True,
-            callback: S3JobCallback | None = None,
     ) -> None:
         """
         Finalize artifact by moving it from temp to final location, optionally upload it to the cloud.
@@ -298,8 +306,8 @@ class StorageManager:
             self._cloud.close()
             self._cloud = None
 
-    def _exists_local(self, path: Path):
-        self._file_manager.exists(path)
+    def _exists_local(self, path: Path) -> bool:
+        return self._file_manager.exists(path)
 
 
     def _exists_cloud(self, key: Path):

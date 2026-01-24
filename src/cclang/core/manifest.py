@@ -48,6 +48,7 @@ class ManifestStore(Generic[ManifestRecord]):
                 for record in self._buffer:
                     payload = record.model_dump(mode="json")
                     f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+                f.flush()
             self._buffer.clear()
 
     def mark(self, record: ManifestRecord):
