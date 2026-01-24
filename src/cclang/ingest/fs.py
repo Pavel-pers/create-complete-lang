@@ -144,6 +144,9 @@ class FileManager:
 
     def resolve_local(self, relative_path: Path) -> Path:
         return self.local_cfg.base_path / relative_path
+    
+    def resolve_cloud(self, relative_path: Path) -> Path:
+        return self.cloud_cfg.base_path / relative_path
 
     def mkdir(self, path: str | Path, treat_as_file: Optional[bool] = None) -> Path:
         """
@@ -275,7 +278,7 @@ class FileManager:
         """Check if a relative path exists in cloud storage."""
         if self.cloud_cfg.enable and self.cloud is not None:
             try:
-                return self.cloud.exists(self.cloud_cfg.base_path / relative_path)
+                return self.cloud.exists(self.resolve_cloud(relative_path))
             except Exception as exc:  # noqa: BLE001
                 # exists() is usually non-critical; if needed, this can be logged/propagated.
                 raise CloudStorageError(
@@ -297,15 +300,52 @@ class FileManager:
         try:
             self.cloud.upload(
                 local_path,
-                self.cloud_cfg.base_path / relative_path,
+                self.resolve_cloud(relative_path),
                 blocking=blocking,
                 callback=callback,
                 )
         except Exception as exc:  # noqa: BLE001
             raise CloudStorageError(
                 f"Failed to upload {local_path!s} to cloud path "
-                f"{(self.cloud_cfg.base_path / relative_path)!s}"
+                f"{(self.resolve_cloud(relative_path))!s}"
             ) from exc
+
+    def fetch_from_cloud(self, relative_path: Path, overwrite: bool = False) -> Path:
+        """
+        Download a file from cloud storage into the local data root.
+
+        When overwrite=False (default), an existing local file is left untouched.
+        """
+        if not self.cloud_cfg.enable or not self.cloud:
+            raise CloudNotConfiguredError("Cloud store is not enabled")
+
+        relative_dest = ensure_relative(Path(relative_path), self.local_cfg.base_path, "relative_path")
+        orig_cloud_path = self.resolve_cloud(relative_dest)
+        dest_local_path = self.resolve_local(relative_dest)
+
+        if dest_local_path.exists() and not overwrite:
+            return dest_local_path
+
+        try:
+            dest_local_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise LocalStorageError(
+                f"Failed to create directory for {dest_local_path!s}"
+            ) from exc
+
+        try:
+            self.cloud.download(
+                orig_cloud_path,
+                dest_local_path,
+                )
+        except Exception as exc:  # noqa: BLE001
+            raise CloudStorageError(
+                f"Failed to download cloud path "
+                f"{(self.resolve_cloud(relative_dest))!s} "
+                f"to {dest_local_path!s}"
+            ) from exc
+        return dest_local_path
+
 
     def cloud_download(self, relative_path: Path, dest_local_path: Path) -> None:
         """Download a cloud file at relative_path to dest_local_path locally."""
@@ -322,13 +362,13 @@ class FileManager:
 
         try:
             self.cloud.download(
-                self.cloud_cfg.base_path / relative_path,
+                self.resolve_cloud(relative_path),
                 dest_local_path,
                 )
         except Exception as exc:  # noqa: BLE001
             raise CloudStorageError(
                 f"Failed to download cloud path "
-                f"{(self.cloud_cfg.base_path / relative_path)!s} "
+                f"{(self.resolve_cloud(relative_path))!s} "
                 f"to {dest_local_path!s}"
             ) from exc
 

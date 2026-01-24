@@ -52,7 +52,9 @@ cclang-discover-links = "pipelines.corpus.discover_links:main"
 cclang-fetch-pdfs = "pipelines.corpus.fetch_pdfs:main"
 cclang-extract_text = "pipelines.corpus.extract_text:main"
 cclang-tokenize-text = "pipelines.corpus.tokenize_text:main"
+cclang-lemmatize-text = "pipelines.corpus.lemmatization:main"
 upload-local-to-s3 = "scripts.upload_local_to_s3:main"
+load-from-s3 = "scripts.load_local_from_s3:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

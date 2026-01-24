@@ -1,5 +1,7 @@
 import argparse
 import hashlib
+import logging
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,15 +26,7 @@ from cclang.io.schemas import (
     ProcessingStatus,
 )
 from cclang.models.tasks_queue import TaskQueue
-
-
-def lemmatize_marathi_token(token: str) -> LemmaToken:
-    """
-    Placeholder: assumed to be implemented elsewhere.
-    Should return LemmaToken with fields filled (lemma, pos, analyses, is_oov, is_ambiguous).
-    """
-    raise NotImplementedError
-
+from cclang.corpus.lemmatizers.apertium_mar import lemmatize_marathi_token
 
 DEVANAGARI_RANGE = r"\u0900-\u097F"
 DEVANAGARI_DIGITS = r"\u0966-\u096F"
@@ -58,11 +52,11 @@ class Counters:
     def bump(self, name: str, logger: BoundLogger) -> None:
         current = getattr(self, name) + 1
         setattr(self, name, current)
-        if current % 500 == 0 and logger.isEnabledFor(logger.logger.DEBUG):
+        if current % 500 == 0 and logger.isEnabledFor(logging.DEBUG):
             logger.warning("counter threshold", extra={"counter": name, "value": current})
 
 
-def _lemmatize_doc(doc: DocTok, log: BoundLogger, global_counters: Counters) -> DocLemma:
+def _lemmatize_doc(doc: DocTok, log: BoundLogger, global_counters: Counters | None) -> DocLemma:
     sentences: List[List[LemmaToken]] = []
     local_counters = Counters()
 
@@ -70,17 +64,20 @@ def _lemmatize_doc(doc: DocTok, log: BoundLogger, global_counters: Counters) -> 
         lemma_sentence: List[LemmaToken] = []
         for tok in sentence:
             if _is_weird_token(tok):
-                global_counters.bump("num_weird", log)
+                if global_counters is not None:
+                    global_counters.bump("num_weird", log)
                 local_counters.num_weird += 1
                 continue
 
             lemma_tok = lemmatize_marathi_token(tok)
 
             if lemma_tok.is_oov:
-                global_counters.bump("num_oov", log)
+                if global_counters is not None:
+                    global_counters.bump("num_oov", log)
                 local_counters.num_oov += 1
             if lemma_tok.is_ambiguous:
-                global_counters.bump("num_ambiguous", log)
+                if global_counters is not None:
+                    global_counters.bump("num_ambiguous", log)
                 local_counters.num_ambiguous += 1
 
             lemma_sentence.append(lemma_tok)
@@ -126,7 +123,7 @@ def run_pipeline(
             cache_files=True,
             temp_base=data_path / "temp/lemmatization",
         ),
-        cloud_cfg=CloudConfig(enable=s3_cfg.enable, base_path=Path("data"), s3_config=s3_cfg, max_upload_threads=2),
+        cloud_cfg=CloudConfig(enable=s3_cfg.enable, base_path=Path("data"), s3_config=s3_cfg, max_upload_threads=2, max_pool_connections=48),
     )
 
     manifest = ManifestStore(manifest_path, LemmatizeManifestRecord, file_manager)
@@ -145,8 +142,8 @@ def run_pipeline(
         if max_count is not None and task_queue.qsize() >= max_count:
             break
 
-    result_queue: Queue[LemmatizeManifestRecord] = Queue()
-    global_counters = Counters()
+    result_queue: Queue[LemmatizeManifestRecord] = Queue() 
+    global_counters = Counters() if log.isEnabledFor(logging.DEBUG) else None
 
     log.info("pipeline start", extra={"tasks": task_queue.qsize()})
 
@@ -215,7 +212,7 @@ def run_pipeline(
 
     work_threads = [
         threading.Thread(target=lemma_worker, args=(log.bind(thread_name=f"lemma_worker_{ind}"),))
-        for ind in range(8)
+        for ind in range(32)
     ]
     for work_thread in work_threads:
         work_thread.start()
@@ -236,6 +233,7 @@ def run_pipeline(
                 pdf_sha=result.pdf_sha,
                 lemma_status=lemma_status,
                 lemma_sha=result.lemma_sha,
+                lemma_path=result.lemma_path,
                 ts=result.ts,
             )
         except Empty:
@@ -251,11 +249,11 @@ def run_pipeline(
 
     log.info(
         "lemmatization completed",
-        extra={
+        extra=({
             "num_oov": global_counters.num_oov,
             "num_ambiguous": global_counters.num_ambiguous,
             "num_weird_token": global_counters.num_weird,
-        },
+        } if global_counters is not None else {}),
     )
     manifest.flush()
     pdf_states.close()
@@ -335,4 +333,4 @@ def main(argv: Iterable[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))
