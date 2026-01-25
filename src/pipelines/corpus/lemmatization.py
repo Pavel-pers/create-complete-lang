@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 import logging
+import signal
 import sys
 import threading
 from dataclasses import dataclass
@@ -151,6 +152,7 @@ def run_pipeline(
         target_status: ProcessingStatus | None = ProcessingStatus.NOT_PROCESSED,
         max_count: int | None = None,
         data_path: Path = Path("data"),
+        stop_event: threading.Event | None = None,
 ):
     data_path = Path(data_path)
     data_path.mkdir(parents=True, exist_ok=True)
@@ -200,10 +202,18 @@ def run_pipeline(
 
         def lemma_worker(worker_log: BoundLogger):
             while True:
-                try:
-                    task = task_queue.get(timeout=10)
-                except Empty:
+                if stop_event is not None and stop_event.is_set():
+                    worker_log.info("stop signal received, exiting worker")
                     return
+                try:
+                    task = task_queue.get(timeout=2)
+                except Empty:
+                    # Check if we should stop or if queue is exhausted
+                    if stop_event is not None and stop_event.is_set():
+                        return
+                    if task_queue.qsize() == 0 and task_queue.unfinished_tasks == 0:
+                        return  # All tasks done
+                    continue
 
                 tokenized_path_raw = str(task.tokenize_path).replace("\\", "/")
                 normalized_tok_path = ensure_relative(Path(tokenized_path_raw), data_path, "tokenize_path")
@@ -276,9 +286,13 @@ def run_pipeline(
         for work_thread in work_threads:
             work_thread.start()
 
+        stopped = False
         while any(thread.is_alive() for thread in work_threads) or not result_queue.empty():
+            if stop_event is not None and stop_event.is_set() and not stopped:
+                log.warning("stop signal received, finishing current tasks...")
+                stopped = True
             try:
-                result = result_queue.get(timeout=10)
+                result = result_queue.get(timeout=2)
                 lemma_path: Optional[Path] = None
                 lemma_sha: Optional[str] = None
                 lemma_status: ProcessingStatus = ProcessingStatus.NOT_PROCESSED
@@ -410,6 +424,23 @@ def main(argv: Iterable[str] | None = None) -> None:
         ProcessingStatus.NOT_PROCESSED if args.target_status in ("none", "pending") else ProcessingStatus(
             args.target_status)
     )
+
+    # Set up graceful shutdown on SIGINT/SIGTERM
+    stop_event = threading.Event()
+
+    def _handle_signal(sig, _frame):
+        if stop_event.is_set():
+            return  # Already stopping
+        log.warning("received stop signal, initiating graceful shutdown...", extra={"signal": sig})
+        stop_event.set()
+
+    if threading.current_thread() is threading.main_thread():
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                signal.signal(sig, _handle_signal)
+            except (OSError, ValueError):
+                pass  # Signal not supported on this platform
+
     try:
         return run_pipeline(
             output_base_path=args.output_base_path,
@@ -419,7 +450,10 @@ def main(argv: Iterable[str] | None = None) -> None:
             target_status=target_status,
             max_count=max_count,
             data_path=data_path,
+            stop_event=stop_event,
         )
+    except KeyboardInterrupt:
+        log.warning("interrupted by user")
     except Exception:
         log.exception("unexpected error")
         raise
