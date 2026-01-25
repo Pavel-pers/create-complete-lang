@@ -321,8 +321,8 @@ class StorageManager:
 
     def close(self) -> None:
         if self._cloud is not None:
-            self.push_manifest()
             self._cloud.close()
+            self.push_manifest()
             self._cloud = None
 
     def _exists_local(self, path: Path) -> bool:

@@ -118,7 +118,7 @@ def _lemmatize_doc(doc: DocTok, log: BoundLogger, global_counters: Counters | No
                 unique_tokens.add(tok)
 
     # Step 2: Batch lemmatize all unique tokens
-    token_cache = batch_lemmatize_marathi(list(unique_tokens), batch_size=100)
+    token_cache = batch_lemmatize_marathi(list(unique_tokens), batch_size=50)
 
     # Step 3: Build output sentences using the cache
     sentences: List[List[LemmaToken]] = []
@@ -302,7 +302,7 @@ def run_pipeline(
 
         work_threads = [
             threading.Thread(target=lemma_worker, args=(log.bind(thread_name=f"lemma_worker_{ind}"),))
-            for ind in range(32)
+            for ind in range(8)
         ]
         for work_thread in work_threads:
             work_thread.start()
@@ -381,8 +381,8 @@ def run_pipeline(
         )
     finally:
         manifest.flush()
-        pdf_states.close()
-        storage_manager.close()
+        storage_manager.close()  # Wait for uploads + callbacks first (they write to pdf_states)
+        pdf_states.close()       # Now safe to close DB connection
         log.info("files closed")
 
 

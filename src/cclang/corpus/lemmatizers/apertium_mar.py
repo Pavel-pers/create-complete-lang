@@ -213,7 +213,7 @@ def _analyze_single_fallback(
 
 
 def batch_lemmatize_marathi(
-    tokens: List[str], batch_size: int = 100
+    tokens: List[str], batch_size: int = 50
 ) -> dict[str, LemmaToken]:
     """
     Batch lemmatize multiple tokens efficiently.
@@ -223,7 +223,7 @@ def batch_lemmatize_marathi(
 
     Args:
         tokens: List of unique tokens to lemmatize
-        batch_size: Number of tokens per apertium call (default 100)
+        batch_size: Number of tokens per apertium call (default 50, optimal for performance)
 
     Returns:
         Dict mapping token -> LemmaToken

@@ -462,6 +462,7 @@ class S3Store:
 
     def close(self, timeout: float = 30.0):
         """Drain the upload queue and stop worker threads."""
+        logger.info("Cloud is closing. Waiting for upload threads to terminate.")
         if self._upload_queue is None or self._upload_threads is None:
             return
         for _ in self._upload_threads:
@@ -471,3 +472,4 @@ class S3Store:
             thread.join(timeout=timeout)
             if thread.is_alive():
                 logger.warning(f"Upload worker thread {thread.name} did not terminate in {timeout} seconds")
+        logger.info("Cloud upload threads terminated. Cloud is closed.")
