@@ -60,6 +60,7 @@ def run_pipeline(
         ),
         cloud_cfg=CloudConfig(
             enable=s3_cfg.enable,
+            base_path=Path("data"),
             s3_config=s3_cfg,
             max_upload_threads=8,
         ),

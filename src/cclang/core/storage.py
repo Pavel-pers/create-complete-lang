@@ -20,8 +20,9 @@ class StorageManagerError(Exception):
 
 
 class ErasingUploadCallback(DefaultUploadCallback):
-    def __init__(self, data_to_erase: Path) -> None:
+    def __init__(self, data_to_erase: Path, child_cb: Optional[S3JobCallback] = None) -> None:
         super().__init__()
+        self.child_cb = child_cb
         self.data_to_erase = data_to_erase
 
     def on_success(self, mapping: S3Mapping, extra: Optional[Dict] = None) -> None:
@@ -32,7 +33,19 @@ class ErasingUploadCallback(DefaultUploadCallback):
             pass  # already erased
         except OSError as exc:
             logger.warning(f"Memory Leak: Failed to remove temporary file {self.data_to_erase!s}")
+        finally:
+            if self.child_cb is not None:
+                self.child_cb.on_success(mapping, extra)
 
+    def on_retry(self, mapping: S3Mapping, exc_type, exc_value, traceback, extra: Optional[Dict] = None) -> None:
+        super().on_retry(mapping, exc_type, exc_value, traceback, extra)
+        if self.child_cb is not None:
+            self.child_cb.on_retry(mapping, exc_type, exc_value, traceback, extra)
+
+    def on_failed(self, mapping: S3Mapping, exc_type, exc_value, traceback, extra: Optional[Dict] = None) -> None:
+        super().on_failed(mapping, exc_type, exc_value, traceback, extra)
+        if self.child_cb is not None:
+            self.child_cb.on_failed(mapping, exc_type, exc_value, traceback, extra)
 
 ManifestRecordsType = TypeVar("T", bound=BaseModel)
 
@@ -40,12 +53,12 @@ ManifestRecordsType = TypeVar("T", bound=BaseModel)
 class CloudConfig:
     enable: bool
     s3_config: S3Config
+    base_path: Path
     max_upload_threads: int = 8
     max_download_threads: int = 0
     cloud_max_attempts: int = 4
     cloud_base_backoff: float = 0.5
     max_pool_connections: Optional[int] = None
-
 
 class StorageManager:
     def __init__(self, local_cfg: LocalConfig, cloud_cfg: CloudConfig):
@@ -58,6 +71,7 @@ class StorageManager:
         self._cloud: Optional[S3Store] = None
         self.cloud_cfg = cloud_cfg
         if self.cloud_cfg.enable:
+            self.cloud_cfg.s3_config.root_prefix = self.cloud_cfg.s3_config.root_prefix / self.cloud_cfg.base_path
             self._cloud = S3Store(
                 cfg=self.cloud_cfg.s3_config,
                 transfer_manifest=transfer_manifest,
@@ -89,7 +103,9 @@ class StorageManager:
                           model_class: Type[ManifestRecordsType] = BaseModel,
                           flush_every: int = 1) -> ManifestStore[ManifestRecordsType]:
         manifest_path = self._file_manager.resolve_local(Path(manifest_name))
-        manifest = ManifestStore(manifest_path, model_class, self._file_manager, flush_every=flush_every)
+        manifest_relative_path = self._file_manager.ensure_relative(manifest_path)
+        logger.info('Registering manifest %s', manifest_path)
+        manifest = ManifestStore(manifest_relative_path, model_class, self._file_manager, flush_every=flush_every)
         self._manifests[str(manifest_name)] = manifest
         return manifest
 
@@ -260,6 +276,7 @@ class StorageManager:
             temp_path: Path,
             dest_path: Path,
             blocking: bool = True,
+            callback: Optional[S3JobCallback] = None
     ) -> None:
         """
         Finalize artifact by moving it from temp to final location, optionally upload it to the cloud.
@@ -286,8 +303,9 @@ class StorageManager:
             upload_callback = DefaultUploadCallback()
             # if the call is async, and we must erase local data, erase it in callback
             if not self.save_local_enabled() and not blocking:
-                upload_callback = ErasingUploadCallback(source_path)
-
+                upload_callback = ErasingUploadCallback(source_path, child_cb=callback)
+            else:
+                upload_callback = callback or upload_callback
             self._cloud.upload(source_path, relative_key=relative_path, callback=upload_callback, blocking=blocking)
 
         # * erasing temp data
@@ -304,6 +322,7 @@ class StorageManager:
     def close(self) -> None:
         if self._cloud is not None:
             self._cloud.close()
+            self.push_manifest()
             self._cloud = None
 
     def _exists_local(self, path: Path) -> bool:

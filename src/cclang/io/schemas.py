@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import ClassVar, Dict, List, Optional
+from typing import ClassVar, Dict, List, Optional, Any
 from enum import Enum
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -117,6 +117,31 @@ class TokenizeManifestRecord(BaseModel):
     def id(self):
         return self.pdf_sha
 
+
+
+class LemmatizeManifestRecord(BaseModel):
+    schema_version: str = Field(default=SCHEMA_VERSION)
+    pdf_sha: str
+
+    tokenize_path: str
+    status: ProcessedPdfStatus
+
+    lemma_path: Optional[str]
+    lemma_sha: Optional[str]
+    error: Optional[str] = None
+
+    ts: str = Field(default_factory= lambda: datetime.now().isoformat() + 'Z')
+
+    STATUS_OK: ClassVar[ProcessedPdfStatus] = ProcessedPdfStatus.OK
+    STATUS_ERROR: ClassVar[ProcessedPdfStatus] = ProcessedPdfStatus.ERROR
+    STATUS_SKIPPED: ClassVar[ProcessedPdfStatus] = ProcessedPdfStatus.SKIPPED
+
+    @property
+    def id(self):
+        return self.pdf_sha
+
+
+
 class UploadStatus(str, Enum):
     QUEUED = "queued"
     STARTED = "started"
@@ -127,7 +152,7 @@ class UploadManifestRecord(BaseModel):
     schema_version: str = Field(default=SCHEMA_VERSION)
 
     local_path: Path
-    cloud_key: Path
+    cloud_key: str
     status: UploadStatus
 
     ts: str = Field(default_factory= lambda: datetime.now().isoformat() + 'Z')
@@ -151,6 +176,23 @@ class DocTok(BaseModel):
     lang: str
     sentences: List[List[str]]  # tokenized sentences
     meta: Optional[Dict] = None
+
+class LemmaToken(BaseModel):
+    token: str
+    lemma: str
+    pos: Optional[str] = None
+    analyses: Optional[List[str]] = None
+    # for example: ["lemma<n><pl>", "lemma2<v><past>"]
+    is_oov: bool = False
+    is_ambiguous: bool = False
+
+
+class DocLemma(BaseModel):
+    schema_version: str = Field(default=SCHEMA_VERSION)
+    id: str
+    lang: str
+    sentences: List[List[LemmaToken]]
+    meta: Optional[Dict[str, Any]] = None
 
 
 class CorpusBookLink(BaseModel):

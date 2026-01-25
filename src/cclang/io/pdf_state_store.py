@@ -140,6 +140,7 @@ class PdfStateStore:
     def update_lemma_status(self, pdf_sha: str,
                             lemma_status: ProcessingStatus,
                             lemma_sha: str | None,
+                            lemma_path: str | None,
                             ts: str | None) -> None:
         lemma_update_at: Optional[str] = ts
         with self._lock:
@@ -151,10 +152,11 @@ class PdfStateStore:
                     UPDATE pdf_state
                     SET lemma_status     = %s,
                         lemma_sha        = %s,
+                        lemma_path       = %s,
                         lemma_updated_at = %s
                     WHERE pdf_sha = %s
                     """,
-                    (lemma_status.value, lemma_sha, lemma_update_at, pdf_sha),
+                    (lemma_status.value, lemma_sha, lemma_path, lemma_update_at, pdf_sha),
                 )
             self._conn.commit()
 
