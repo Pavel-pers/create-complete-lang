@@ -12,20 +12,20 @@ from indicnlp.tokenize import sentence_tokenize, indic_tokenize
 import hashlib
 
 from cclang.config.s3 import load_s3_config
+from cclang.core.storage import StorageManager, CloudConfig
+from cclang.io.fs import LocalConfig, ensure_relative, get_shard_relative
 from cclang.io.db import get_conn
-from cclang.io.manifest import ManifestStore
 from cclang.io.pdf_state_store import PdfStateStore
 from cclang.io.schemas import DocRaw, DocTok, ProcessingStatus, TokenizeManifestRecord
 from cclang.common.logx import BoundLogger, setup_logging, get_logger
-from cclang.ingest.fs import FileManager, ensure_relative, LocalConfig, CloudConfig, get_shard_relative
-from cclang.ingest.exceptions import LocalStorageError, CloudStorageError
+from cclang.io.exceptions import LocalStorageError, CloudStorageError
 from cclang.models.tasks_queue import TaskQueue
 
 
 def _clean_marathi_text(text: str) -> str:
     if not hasattr(_clean_marathi_text, "_cfg"):
         lang_range = "\u0900-\u097F"  # диапазон деванагари
-        extra_punct = "।“”‘’—–…«»"
+        extra_punct = "।""''—–…«»"
         punctuation_range = string.punctuation + extra_punct
         digit_range = "0-9"
         whitespace_range = r"\s"
@@ -58,8 +58,8 @@ def _clean_marathi_text(text: str) -> str:
     return text
 
 
-def _iter_text_pages(book_path: Path, fm: FileManager):
-    with fm.load_data(book_path, mode='r') as stream:
+def _iter_text_pages(book_path: Path, storage: StorageManager):
+    with storage.open(book_path, mode='r', encoding='utf-8') as stream:
         for line in stream:
             yield DocRaw.model_validate_json(line).text
 
@@ -71,10 +71,10 @@ def _tokenize_text(text: str) -> List[List[str]]:
     return list(sentences_tokens)
 
 
-def tokenize_text(pdf_path: Path, pdf_sha: str, logger: BoundLogger, fm: FileManager) -> DocTok:
+def tokenize_text(pdf_path: Path, pdf_sha: str, logger: BoundLogger, storage: StorageManager) -> DocTok:
     logger.debug('start tokenize text', extra={"text_path": str(pdf_path)})
 
-    book_text = '\n\n'.join(_iter_text_pages(pdf_path, fm))
+    book_text = '\n\n'.join(_iter_text_pages(pdf_path, storage))
     book_tokens = _tokenize_text(book_text)
     logger.debug('finish tokenize text', extra={"text_path": str(pdf_path)})
     return DocTok(id=pdf_sha, lang='mr', sentences=book_tokens,
@@ -101,23 +101,26 @@ def run_pipeline(
     data_path.mkdir(parents=True, exist_ok=True)
 
     output_base_rel = ensure_relative(Path(output_base_path), data_path, "tokenize_output_base_path")
-    output_base_abs = data_path / output_base_rel
-    output_base_abs.mkdir(parents=True, exist_ok=True)
 
     db_conn = get_conn(database_dsn)
 
     s3_cfg = load_s3_config()
-    file_manager = FileManager(
+    storage = StorageManager(
         local_cfg=LocalConfig(
             base_path=data_path,
             save_local=True,
             cache_files=True,
             temp_base=data_path / "temp/tokenize_text",
         ),
-        cloud_cfg=CloudConfig(enable=s3_cfg.enable, base_path=Path("data"), s3_config=s3_cfg, max_upload_threads=2),
+        cloud_cfg=CloudConfig(
+            enable=s3_cfg.enable,
+            base_path=Path("data"),
+            s3_config=s3_cfg,
+            max_upload_threads=2,
+        ),
     )
 
-    manifest = ManifestStore(manifest_path, TokenizeManifestRecord, file_manager)
+    manifest = storage.register_manifest(manifest_path, TokenizeManifestRecord)
     pdf_states = PdfStateStore(db_conn)
 
     log.info(f'pipeline target tasks: text_status={ProcessingStatus.OK}, tokenize_status= {target_status}, limit={max_count}')
@@ -146,10 +149,10 @@ def run_pipeline(
             result: TokenizeManifestRecord
 
             try:
-                tokenized_doc = tokenize_text(normalized_text_path, task.pdf_sha, worker_log, file_manager)
+                tokenized_doc = tokenize_text(normalized_text_path, task.pdf_sha, worker_log, storage)
                 shard_relative_result = output_base_rel / get_shard_relative(task.pdf_sha, '.tok.json')
                 tokenized_json = tokenized_doc.model_dump_json(ensure_ascii=False)
-                with file_manager.load_data(shard_relative_result, mode='w') as stream:
+                with storage.open(shard_relative_result, mode='w', encoding='utf-8') as stream:
                     stream.write(tokenized_json)
 
                 tokenize_sha = hashlib.sha256(tokenized_json.encode()).hexdigest()
@@ -161,11 +164,11 @@ def run_pipeline(
                                                 )
             except Exception as exc:
                 if isinstance(exc, LocalStorageError):
-                    worker_log.exception('local storage error during tokenization', extra={"text-file": normalized_text_path}, exc=exc)
+                    worker_log.exception('local storage error during tokenization', extra={"text-file": normalized_text_path})
                 elif isinstance(exc, CloudStorageError):
-                    worker_log.exception('cloud storage error during tokenization', extra={"text-file": normalized_text_path}, exc=exc)
+                    worker_log.exception('cloud storage error during tokenization', extra={"text-file": normalized_text_path})
                 else:
-                    worker_log.exception("unexpected error during tokenization", extra={"text-file": normalized_text_path}, exc=exc)
+                    worker_log.exception("unexpected error during tokenization", extra={"text-file": normalized_text_path})
 
                 result = TokenizeManifestRecord(pdf_sha=task.pdf_sha,
                                                 text_path=str(normalized_text_path),
@@ -220,7 +223,7 @@ def run_pipeline(
     log.info("tokenize text completed, closing files")
     manifest.flush()
     pdf_states.close()
-    file_manager.close()
+    storage.close()
     log.info("files closed")
 
 def main(argv: Iterable[str] | None = None) -> None:

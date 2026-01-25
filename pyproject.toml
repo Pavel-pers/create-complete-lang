@@ -90,3 +90,6 @@ pretty = true
 minversion = "7.0"
 addopts = "-ra -q --disable-warnings"
 testpaths = ["tests"]
+markers = [
+    "e2e: end-to-end tests with real S3 (deselect with '-m \"not e2e\"')",
+]

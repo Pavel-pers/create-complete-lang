@@ -13,14 +13,12 @@ from dotenv import load_dotenv
 
 from cclang.common.logx import BoundLogger, setup_logging, get_logger
 from cclang.config.s3 import load_s3_config
-from cclang.ingest import fs
-from cclang.ingest.fs import LocalConfig, CloudConfig, ensure_relative
+from cclang.core.storage import StorageManager, CloudConfig
+from cclang.io.fs import LocalConfig, ensure_relative, get_shard_relative, calculate_sha256
 from cclang.io.db import get_conn
-from cclang.io.manifest import ManifestStore
 from cclang.io.pdf_state_store import PdfStateStore
 from cclang.io.schemas import PdfState, ProcessingStatus, ProcessedPdfManifestRecord, DocRaw
 from cclang.models.tasks_queue import TaskQueue
-from cclang.ingest.fs import FileManager, get_shard_relative
 
 OCR_DPI = 300
 POPPLER_TIMEOUT_SECONDS = 120
@@ -81,15 +79,15 @@ class ExtractedTextResult:
 def extract_text_from_pdf_to_temp(pdf_path: Path,
                                   pdf_sha: str,
                                   logger: BoundLogger,
-                                  fm: FileManager,
+                                  storage: StorageManager,
                                   ) -> ExtractedTextResult:
     logger.debug("start ocr", extra={"pdf": str(pdf_path)})
     result: ExtractedTextResult | None = None
     keep_file = False
-    temp_dist = fm.create_temp_file(".jsonl.part")
+    temp_dist = storage.create_temp_file(".jsonl.part")
     try:
         temp_dist.parent.mkdir(parents=True, exist_ok=True)
-        with fm.load_data(pdf_path, mode='rb') as pdf_file:
+        with storage.open(pdf_path, mode='rb') as pdf_file:
             pdf_local_path = Path(pdf_file.name)
 
             with open(temp_dist, "w", encoding="utf-8", newline='') as stream:
@@ -117,7 +115,7 @@ def extract_text_from_pdf_to_temp(pdf_path: Path,
                     stream.write("\n")
         logger.info("pdf rendered to images", extra={"pdf": str(pdf_path), "pages": pages_processed})
         keep_file = True
-        result = ExtractedTextResult(tmp_file=temp_dist, text_sha=fs.calculate_sha256(temp_dist))
+        result = ExtractedTextResult(tmp_file=temp_dist, text_sha=calculate_sha256(temp_dist))
     except (PDFPageCountError, PDFInfoNotInstalledError, TimeoutExpired, PDFPopplerTimeoutError) as exc:
         result = ExtractedTextResult(tmp_file=None, text_sha=None, error=str(exc))
         logger.warning("failed to render pdf", extra={"pdf": str(pdf_path), "error": str(exc)})
@@ -147,23 +145,26 @@ def run_pipeline(
     data_path.mkdir(parents=True, exist_ok=True)
 
     output_base_rel = ensure_relative(Path(output_base_path), data_path, "output_base_path")
-    output_base_abs = data_path / output_base_rel
-    output_base_abs.mkdir(parents=True, exist_ok=True)
 
     db_conn = get_conn(database_dsn)
 
     s3_cfg = load_s3_config()
-    file_manager = FileManager(
+    storage = StorageManager(
         local_cfg=LocalConfig(
             base_path=data_path,
             save_local=True,
             cache_files=True,
             temp_base=data_path / "temp/extract_text",
         ),
-        cloud_cfg=CloudConfig(enable=s3_cfg.enable, base_path=Path("data"), s3_config=s3_cfg, max_upload_threads=2),
+        cloud_cfg=CloudConfig(
+            enable=s3_cfg.enable,
+            base_path=Path("data"),
+            s3_config=s3_cfg,
+            max_upload_threads=2,
+        ),
     )
 
-    manifest = ManifestStore(manifest_path, ProcessedPdfManifestRecord, file_manager)
+    manifest = storage.register_manifest(manifest_path, ProcessedPdfManifestRecord)
     pdf_states = PdfStateStore(db_conn)
     try:
         if sync_with_fetched_items:
@@ -189,7 +190,7 @@ def run_pipeline(
                 try:
                     worker_result = None
                     temp_result = extract_text_from_pdf_to_temp(
-                        Path(task.pdf_path), task.pdf_sha, worker_log, file_manager
+                        Path(task.pdf_path), task.pdf_sha, worker_log, storage
                     )
                     if temp_result.tmp_file is not None and temp_result.text_sha:
                         cached_item = pdf_states.get_text_sha(temp_result.text_sha)
@@ -212,7 +213,7 @@ def run_pipeline(
                             shard_relative = output_base_rel / get_shard_relative(
                                 temp_result.text_sha, '.jsonl'
                             )
-                            file_manager.collect_result(temp_result.tmp_file, shard_relative, blocking=True)
+                            storage.finalize_artifact(temp_result.tmp_file, shard_relative, blocking=True)
 
                             worker_result = ProcessedPdfManifestRecord(
                                 pdf_path=task.pdf_path,
@@ -291,7 +292,7 @@ def run_pipeline(
         manifest.flush()
     finally:
         pdf_states.close()
-        file_manager.close()
+        storage.close()
         log.info("files closed")
 
 

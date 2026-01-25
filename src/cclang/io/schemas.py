@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import ClassVar, Dict, List, Optional, Any
 from enum import Enum
 from pydantic import BaseModel, Field, HttpUrl
@@ -116,6 +117,8 @@ class TokenizeManifestRecord(BaseModel):
     def id(self):
         return self.pdf_sha
 
+
+
 class LemmatizeManifestRecord(BaseModel):
     schema_version: str = Field(default=SCHEMA_VERSION)
     pdf_sha: str
@@ -137,6 +140,26 @@ class LemmatizeManifestRecord(BaseModel):
     def id(self):
         return self.pdf_sha
 
+
+
+class UploadStatus(str, Enum):
+    QUEUED = "queued"
+    STARTED = "started"
+    SUCCEDED = "succeeded"
+    FAILED = "failed"
+
+class UploadManifestRecord(BaseModel):
+    schema_version: str = Field(default=SCHEMA_VERSION)
+
+    local_path: Path
+    cloud_key: str
+    status: UploadStatus
+
+    ts: str = Field(default_factory= lambda: datetime.now().isoformat() + 'Z')
+
+    @property
+    def id(self):
+        return str(self.local_path) + ';' + str(self.cloud_key)
 
 # ---------- Corpus ----------
 

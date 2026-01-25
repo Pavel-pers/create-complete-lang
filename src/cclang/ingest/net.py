@@ -1,14 +1,19 @@
 """Network helpers for downloading files to temp storage with hashing and cleanup."""
+from __future__ import annotations
+
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 import requests
 from requests.exceptions import RequestException
 
 from cclang.common import logx
-from cclang.ingest import fs
+from cclang.io import fs
+
+if TYPE_CHECKING:
+    from cclang.core.storage import StorageManager
 
 net_logger = logx.get_logger("cclang.net")
 
@@ -25,15 +30,15 @@ class DownloadResult:
 
 def download_file_to_temp(
     url: str,
-    fm: fs.FileManager | None = None,
+    sm: StorageManager | None = None,
     download_folder: Path | str = Path("data/temp/downloads"),
 ) -> DownloadResult:
     """
     Download file to a temp location and return metadata. Cleans up temp file on errors.
-    If `fm` is provided, temp files are created via FileManager.
+    If `sm` is provided, temp files are created via StorageManager.
     """
     log = net_logger.bind(url=url)
-    temp_dist = fm.create_temp_file(".part") if fm is not None else fs.create_temp_file(download_folder, ".part")
+    temp_dist = sm.create_temp_file(".part") if sm is not None else fs.create_temp_file(download_folder, ".part")
 
     result: DownloadResult | None = None
     keep_file = False
