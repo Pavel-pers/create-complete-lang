@@ -55,6 +55,8 @@ cclang-tokenize-text = "pipelines.corpus.tokenize_text:main"
 cclang-lemmatize-text = "pipelines.corpus.lemmatization:main"
 upload-local-to-s3 = "scripts.upload_local_to_s3:main"
 load-from-s3 = "scripts.load_local_from_s3:main"
+cclang-explore-vocabulary = "scripts.explore.vocabulary:main"
+cclang-explore-lemma-stats = "scripts.explore.lemma_stats:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -62,7 +64,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["cclang*", "pipelines*"]
+include = ["cclang*", "pipelines*", "scripts*"]
 
 [tool.black]
 line-length = 100
