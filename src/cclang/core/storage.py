@@ -103,7 +103,9 @@ class StorageManager:
                           model_class: Type[ManifestRecordsType] = BaseModel,
                           flush_every: int = 1) -> ManifestStore[ManifestRecordsType]:
         manifest_path = self._file_manager.resolve_local(Path(manifest_name))
-        manifest = ManifestStore(manifest_path, model_class, self._file_manager, flush_every=flush_every)
+        manifest_relative_path = self._file_manager.ensure_relative(manifest_path)
+        logger.info('Registering manifest %s', manifest_path)
+        manifest = ManifestStore(manifest_relative_path, model_class, self._file_manager, flush_every=flush_every)
         self._manifests[str(manifest_name)] = manifest
         return manifest
 

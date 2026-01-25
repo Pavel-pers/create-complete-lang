@@ -88,19 +88,26 @@ class FileManager:
 
     def __init__(self, local_cfg: LocalConfig, max_locks: int = 1000):
         self.local_cfg = local_cfg
+        self._base_path = self.local_cfg.base_path.resolve()
+        self.local_cfg.base_path = self._base_path
+        if not self._base_path.exists():
+            raise ValueError(f'Path does not exist: {self._base_path}')
+
         self._locks: Dict[Path, threading.Lock] = {}
         self._locks_lock = threading.Lock()
         self._max_locks = max_locks
         self._operation_count = 0
 
-    def _relative_to_local_base(self, path: Path) -> Path:
+    def ensure_relative(self, path: Path):
         """
         Make sure the path is relative to local_cfg.base_path.
 
         Absolute paths outside of base_path -> LocalPathError.
         Relative paths are returned as is.
         """
-        return ensure_relative(path, self.local_cfg.base_path, "data file")
+
+        return ensure_relative(path, self._base_path, "data file")
+
 
     def _get_lock(self, path: Path) -> threading.Lock:
         """Get or create a lock for the given path with automatic cleanup."""
@@ -134,18 +141,18 @@ class FileManager:
             ) from exc
 
     def shard_local_path(self, file_name: str, suffix: str = "") -> Path:
-        return get_shard_path(self.local_cfg.base_path, file_name, suffix)
+        return get_shard_path(self._base_path, file_name, suffix)
 
     def resolve_local(self, relative_path: Path) -> Path:
-        if relative_path.is_relative_to(self.local_cfg.base_path):
+        if relative_path.is_relative_to(self._base_path):
             return relative_path
-        final_path = (self.local_cfg.base_path / relative_path).resolve()
+        final_path = (self._base_path / relative_path).resolve()
         # Resolve base_path too for correct comparison
-        base_path_resolved = self.local_cfg.base_path.resolve()
+        base_path_resolved = self._base_path.resolve()
         if final_path.is_relative_to(base_path_resolved):
             return final_path
         else:
-            raise ValueError(f"Path {relative_path} is not inside data base path {self.local_cfg.base_path}")
+            raise ValueError(f"Path {relative_path} is not inside data base path {self._base_path}")
 
     def mkdir(self, relative_path: str | Path) -> Path:
         path = self.resolve_local(relative_path)

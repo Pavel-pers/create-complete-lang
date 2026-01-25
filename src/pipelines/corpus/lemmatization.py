@@ -30,7 +30,7 @@ from cclang.io.schemas import (
     ProcessingStatus, ProcessedPdfStatus,
 )
 from cclang.models.tasks_queue import TaskQueue
-from cclang.corpus.lemmatizers.apertium_mar import lemmatize_marathi_token
+from cclang.corpus.lemmatizers.apertium_mar import lemmatize_marathi_token, batch_lemmatize_marathi
 
 DEVANAGARI_RANGE = r"\u0900-\u097F"
 DEVANAGARI_DIGITS = r"\u0966-\u096F"
@@ -104,9 +104,24 @@ class Counters:
 
 
 def _lemmatize_doc(doc: DocTok, log: BoundLogger, global_counters: Counters | None) -> DocLemma:
-    sentences: List[List[LemmaToken]] = []
+    """
+    Instead of calling apertium once per token, collects all unique tokens
+    and processes them in batches.
+    """
     local_counters = Counters()
 
+    # Step 1: Collect unique non-weird tokens
+    unique_tokens: set[str] = set()
+    for sentence in doc.sentences:
+        for tok in sentence:
+            if not _is_weird_token(tok):
+                unique_tokens.add(tok)
+
+    # Step 2: Batch lemmatize all unique tokens
+    token_cache = batch_lemmatize_marathi(list(unique_tokens), batch_size=100)
+
+    # Step 3: Build output sentences using the cache
+    sentences: List[List[LemmaToken]] = []
     for sentence in doc.sentences:
         lemma_sentence: List[LemmaToken] = []
         for tok in sentence:
@@ -116,7 +131,10 @@ def _lemmatize_doc(doc: DocTok, log: BoundLogger, global_counters: Counters | No
                 local_counters.num_weird += 1
                 continue
 
-            lemma_tok = lemmatize_marathi_token(tok)
+            lemma_tok = token_cache.get(tok)
+            if lemma_tok is None:
+                # Fallback (shouldn't happen)
+                lemma_tok = lemmatize_marathi_token(tok)
 
             if lemma_tok.is_oov:
                 if global_counters is not None:
@@ -229,12 +247,15 @@ def run_pipeline(
                     with storage_manager.open(normalized_tok_path, mode="r", encoding="utf-8") as stream:
                         doc_tok = DocTok.model_validate_json(stream.read())
 
+                    worker_log.info('Started lemmatization', extra={"pdf-sha": task.pdf_sha})
                     doc_lemma = _lemmatize_doc(doc_tok, worker_log, global_counters)
+                    worker_log.info('Finish lemmatization', extra={"pdf-sha": task.pdf_sha})
 
                     lemma_json = doc_lemma.model_dump_json(ensure_ascii=False)
                     with open(temp_dist, mode="w", encoding="utf-8") as stream:
                         stream.write(lemma_json)
 
+                    worker_log.info('Lemmatization was successful. Saved local', extra={"pdf-sha": task.pdf_sha})
                     worker_result = LemmatizeWorkerResult(
                         pdf_sha=task.pdf_sha,
                         tokenize_path=str(normalized_tok_path),
