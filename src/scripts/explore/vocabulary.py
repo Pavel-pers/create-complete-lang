@@ -24,13 +24,14 @@ logger = logx.get_logger(__name__)
 
 
 def collect_stats(
-    data_path: Path,
-    db_dsn: str | None,
-    top_n: int = 50,
-    min_df: int | float = 2,
-    max_df: float = 0.90,
-    head: int | None = None,
-    stop_event: threading.Event | None = None,
+        data_path: Path,
+        db_dsn: str | None,
+        top_n: int = 50,
+        min_df: int | float = 2,
+        max_df: float = 0.90,
+        head: int | None = None,
+        stop_event: threading.Event | None = None,
+        ignore_oov: bool = False
 ) -> dict[str, Any]:
     """
     Collect vocabulary statistics from all lemmatized documents.
@@ -45,7 +46,7 @@ def collect_stats(
                 Lemmas appearing in more documents are filtered out.
         head: Limit number of documents to process (for testing)
         stop_event: Optional event to signal early termination
-
+        ignore_oov: If True, ignore OOV tokens
     Returns:
         Dictionary with vocabulary statistics
     """
@@ -120,9 +121,10 @@ def collect_stats(
             doc_lemmas: set[str] = set()
             for sentence in doc_lemma.sentences:
                 for token in sentence:
-                    total_tokens += 1
-                    lemma_tf[token.lemma] += 1
-                    doc_lemmas.add(token.lemma)
+                    if not ignore_oov or not token.is_oov:
+                        total_tokens += 1
+                        lemma_tf[token.lemma] += 1
+                        doc_lemmas.add(token.lemma)
 
             # Update document frequency for each unique lemma in this doc
             for lemma in doc_lemmas:
@@ -297,14 +299,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=float,
         default=2,
         help="Min document frequency. Int for absolute count, float [0-1] for proportion. "
-        "Lemmas in fewer docs are filtered out. (default: 2)",
+             "Lemmas in fewer docs are filtered out. (default: 2)",
     )
     parser.add_argument(
         "--max-df",
         type=float,
         default=0.90,
         help="Max document frequency as proportion [0-1]. "
-        "Lemmas in more docs are filtered out as stopwords. (default: 0.90)",
+             "Lemmas in more docs are filtered out as stopwords. (default: 0.90)",
     )
     parser.add_argument(
         "--head",
@@ -317,6 +319,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         default="INFO",
         help="Logging level (default: INFO)",
+    )
+
+    parser.add_argument(
+        "--ignore-oov",
+        action="store_true",
+        default=False,
     )
 
     args = parser.parse_args(argv)
@@ -359,12 +367,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_df=args.max_df,
             head=args.head,
             stop_event=stop_event,
+            ignore_oov=args.ignore_oov,
         )
     except KeyboardInterrupt:
         logger.warning("Interrupted by user")
         return 130
-    except Exception:
-        logger.exception("Unexpected error")
+    except Exception as err:
+        logger.exception("Unexpected error", extra={"exc":str(err)})
         return 1
 
     # Output results
