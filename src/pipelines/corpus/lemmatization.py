@@ -103,7 +103,7 @@ class Counters:
             logger.debug("counter threshold", extra={"counter": name, "value": current})
 
 
-def _lemmatize_doc(doc: DocTok, log: BoundLogger, global_counters: Counters | None) -> DocLemma:
+def _lemmatize_doc_appertium(doc: DocTok, log: BoundLogger, global_counters: Counters | None) -> DocLemma:
     """
     Instead of calling apertium once per token, collects all unique tokens
     and processes them in batches.
@@ -161,6 +161,11 @@ def _lemmatize_doc(doc: DocTok, log: BoundLogger, global_counters: Counters | No
     }
     return DocLemma(id=doc.id, lang=doc.lang, sentences=sentences, meta=meta)
 
+
+def _lemmatize_doc_stanza(doc: DocTok, log: BoundLogger, global_counters: Counters | None):
+    local_counter = Counters()
+
+    pass
 
 def run_pipeline(
         output_base_path: Path,
@@ -248,7 +253,7 @@ def run_pipeline(
                         doc_tok = DocTok.model_validate_json(stream.read())
 
                     worker_log.info('Started lemmatization', extra={"pdf-sha": task.pdf_sha})
-                    doc_lemma = _lemmatize_doc(doc_tok, worker_log, global_counters)
+                    doc_lemma = _lemmatize_doc_appertium(doc_tok, worker_log, global_counters)
                     worker_log.info('Finish lemmatization', extra={"pdf-sha": task.pdf_sha})
 
                     lemma_json = doc_lemma.model_dump_json(ensure_ascii=False)
