@@ -165,7 +165,7 @@ def _lemmatize_doc_appertium(doc: DocTok, log: BoundLogger, global_counters: Cou
 def _lemmatize_doc_stanza(doc: DocTok, log: BoundLogger, global_counters: Counters | None):
     local_counter = Counters()
 
-    pass
+
 
 def run_pipeline(
         output_base_path: Path,

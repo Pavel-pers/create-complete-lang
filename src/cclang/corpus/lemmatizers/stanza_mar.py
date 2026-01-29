@@ -88,7 +88,8 @@ class MarathiProcessor:
                                pos=word.upos,
                                analyses=[word.lemma],
                                is_oov=False,
-                               is_ambiguous=False
+                               is_ambiguous=False,
+                               is_ne=...
                                )
                 )
 
