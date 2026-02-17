@@ -1,12 +1,16 @@
+import threading
+
 import stanza
 import torch
 from transformers import AutoModelForTokenClassification, AutoTokenizer
 from cclang.io.schemas import LemmaToken
 
+_THREAD_LOCAL = threading.local()
+
 class MahaNER:
-    def __init__(self, model_name: str = "l3cube-pune/marathi-ner"):
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForTokenClassification.from_pretrained(model_name)
+    def __init__(self, model_name: str = "l3cube-pune/marathi-ner", offline: bool = True):
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=offline)
+        self.model = AutoModelForTokenClassification.from_pretrained(model_name, local_files_only=offline)
         self.model.eval()
         self.id2label = self.model.config.id2label
         self.propn_labels = {'Person', 'Location', 'Organization'}
@@ -54,10 +58,9 @@ class MahaNER:
         return results
 
 
-class MarathiProcessor:
+class MarathiStanzaProcessor:
     def __init__(self):
-        # Stanza для лемматизации
-        stanza.download('mr', verbose=False)
+        # Stanza для лемматизации (модель должна быть уже скачана)
         self.nlp = stanza.Pipeline(
             'mr',
             processors='tokenize,pos,lemma',
@@ -89,7 +92,6 @@ class MarathiProcessor:
                                analyses=[word.lemma],
                                is_oov=False,
                                is_ambiguous=False,
-                               is_ne=...
                                )
                 )
 
@@ -99,6 +101,8 @@ class MarathiProcessor:
         # 3. Объединяем
         results = []
         for i, item in enumerate(stanza_results):
+            item.is_ne = ner_results[i]['label'] != "Other"
+            item.ner = ner_results[i]['label'] if item.is_ne else None
             results.append(item)
 
         return results
@@ -106,38 +110,82 @@ class MarathiProcessor:
     def process_batch(self, sentences: list[list[str]]) -> list[list[LemmaToken]]:
         """
         Батчевая обработка нескольких предложений.
+        Оптимизировано: NER батчится по чанкам до 450 токенов (лимит BERT 512).
         """
-        # Stanza батч
+        MAX_NER_TOKENS = 100  # Conservative: BERT subword tokenization can expand 3-5x
+
+        # 1. Stanza батч - лемматизация и POS
         doc = self.nlp(sentences)
 
+        # 2. Извлекаем токены из Stanza результатов
+        sentence_tokens = []
+        for sentence in doc.sentences:
+            sentence_tokens.append([word.text for word in sentence.words])
+
+        # 3. Группируем предложения в NER-чанки по лимиту токенов
+        ner_chunks = []  # list of (sentence_indices, flat_tokens)
+        current_chunk_indices = []
+        current_chunk_tokens = []
+
+        for sent_idx, tokens in enumerate(sentence_tokens):
+            if len(current_chunk_tokens) + len(tokens) > MAX_NER_TOKENS and current_chunk_tokens:
+                # Сохраняем текущий чанк и начинаем новый
+                ner_chunks.append((current_chunk_indices.copy(), current_chunk_tokens.copy()))
+                current_chunk_indices = []
+                current_chunk_tokens = []
+
+            current_chunk_indices.append(sent_idx)
+            current_chunk_tokens.extend(tokens)
+
+        if current_chunk_tokens:
+            ner_chunks.append((current_chunk_indices, current_chunk_tokens))
+
+        # 4. Обрабатываем NER по чанкам
+        sentence_ner_results = [None] * len(doc.sentences)
+
+        for chunk_indices, chunk_tokens in ner_chunks:
+            if not chunk_tokens:
+                continue
+
+            ner_results = self.ner.predict_labels(chunk_tokens)
+
+            # Распределяем результаты по предложениям
+            offset = 0
+            for sent_idx in chunk_indices:
+                sent_len = len(sentence_tokens[sent_idx])
+                sentence_ner_results[sent_idx] = ner_results[offset:offset + sent_len]
+                offset += sent_len
+
+        # 5. Собираем финальные результаты
         all_results = []
         for sent_idx, sentence in enumerate(doc.sentences):
-            tokens = sentences[sent_idx]
+            ner_slice = sentence_ner_results[sent_idx] or []
 
-            # Stanza результаты
-            stanza_results = [
-                {'token': word.text, 'lemma': word.lemma, 'pos': word.upos}
-                for word in sentence.words
-            ]
-
-            # NER результаты
-            ner_results = self.ner.predict_labels(tokens)
-
-            # Объединяем
             sent_results = []
-            for i, item in enumerate(stanza_results):
-                item['ner'] = ner_results[i]['label']
-                item['ner_score'] = ner_results[i]['score']
-                item['is_propn'] = ner_results[i]['label'] in self.ner.propn_labels
+            for word_idx, word in enumerate(sentence.words):
+                ner_label = ner_slice[word_idx]['label'] if word_idx < len(ner_slice) else 'Other'
                 sent_results.append(LemmaToken(
-                    token=item['token'],
-                    lemma=item['lemma'],
-                    pos=item['pos'] or None,
-                    analyses=[item['lemma']],
+                    token=word.text,
+                    lemma=word.lemma,
+                    pos=word.upos or None,
+                    analyses=[word.lemma],
                     is_oov=False,
-                    is_ambiguous=False
+                    is_ambiguous=False,
+                    is_ne=ner_label != 'Other',
+                    ner_result=ner_label if ner_label != 'Other' else None
                 ))
 
             all_results.append(sent_results)
 
         return all_results
+
+def batch_stanza_lemmatize(sentences: list[list[str]]) -> list[list[LemmaToken]]:
+    return get_thread_local_stanza_prerocessor().process_batch(sentences)
+
+def get_thread_local_stanza_prerocessor() -> MarathiStanzaProcessor:
+    """
+    Create one Analyzer per thread to avoid shared-state issues and reduce init overhead.
+    """
+    if not hasattr(_THREAD_LOCAL, "stanza_analyzers"):
+        _THREAD_LOCAL.stanza_processor = MarathiStanzaProcessor()
+    return _THREAD_LOCAL.stanza_processor

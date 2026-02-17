@@ -355,6 +355,152 @@ class PdfStateStore:
                 return map(_pdf_state_from_db_resp, cur.fetchall())
 
 
+    # ── lemma_results table (multi-lemmatizer support) ──────────────
+
+    def ensure_lemma_results_table(self):
+        """Ensure lemma_results exists with composite PK (doc_id, method)."""
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("invalid access to closed connection")
+            with self._conn.cursor() as cur:
+                # Check if table exists
+                cur.execute("""
+                    SELECT EXISTS(
+                        SELECT 1 FROM information_schema.tables
+                        WHERE table_name = 'lemma_results'
+                    )
+                """)
+                table_exists = cur.fetchone()[0]
+
+                if not table_exists:
+                    cur.execute("""
+                        CREATE TABLE lemma_results (
+                            doc_id TEXT NOT NULL,
+                            artefact_id TEXT,
+                            status TEXT NOT NULL,
+                            path TEXT,
+                            method TEXT NOT NULL,
+                            updated_at TIMESTAMP WITH TIME ZONE,
+                            PRIMARY KEY (doc_id, method)
+                        )
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_lemma_results_status
+                        ON lemma_results(method, status)
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_lemma_results_artefact_id
+                        ON lemma_results(artefact_id)
+                    """)
+                else:
+                    # Check if PK is already composite
+                    cur.execute("""
+                        SELECT count(*) FROM information_schema.key_column_usage
+                        WHERE table_name = 'lemma_results'
+                          AND constraint_name = 'lemma_results_pkey'
+                    """)
+                    pk_col_count = cur.fetchone()[0]
+                    if pk_col_count == 1:
+                        cur.execute(
+                            "ALTER TABLE lemma_results DROP CONSTRAINT lemma_results_pkey"
+                        )
+                        cur.execute(
+                            "ALTER TABLE lemma_results ADD PRIMARY KEY (doc_id, method)"
+                        )
+                        # Recreate index for (method, status) queries
+                        cur.execute("DROP INDEX IF EXISTS idx_lemma_results_status")
+                        cur.execute("""
+                            CREATE INDEX idx_lemma_results_status
+                            ON lemma_results(method, status)
+                        """)
+            self._conn.commit()
+
+    def migrate_lemma_data_from_pdf_state(self):
+        """Migrate existing apertium lemma data from pdf_state_old into lemma_results."""
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("invalid access to closed connection")
+            with self._conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO lemma_results
+                        (doc_id, method, status, artefact_id, path, updated_at)
+                    SELECT pdf_sha, 'apertium-mar-morph', lemma_status, lemma_sha,
+                           lemma_path, lemma_updated_at::timestamptz
+                    FROM pdf_state_old
+                    WHERE lemma_status IS NOT NULL AND lemma_status != 'pending'
+                    ON CONFLICT (doc_id, method) DO NOTHING
+                """)
+                migrated = cur.rowcount
+            self._conn.commit()
+            return migrated
+
+    def upsert_lemma_result(self, doc_id: str, method: str,
+                            status: str, artefact_id: str | None = None,
+                            path: str | None = None,
+                            ts: str | None = None) -> None:
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("invalid access to closed connection")
+            with self._conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO lemma_results
+                        (doc_id, method, status, artefact_id, path, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (doc_id, method) DO UPDATE SET
+                        status      = EXCLUDED.status,
+                        artefact_id = EXCLUDED.artefact_id,
+                        path        = EXCLUDED.path,
+                        updated_at  = EXCLUDED.updated_at
+                """, (doc_id, method, status, artefact_id, path, ts))
+            self._conn.commit()
+
+    def filter_unprocessed_for_lemmatizer(
+        self, lemmatizer: str, limit: int | None = None,
+        include_processed: bool = False,
+    ) -> List[PdfState]:
+        """Return docs with tokenize=ok not yet processed by *lemmatizer*.
+
+        When *include_processed* is True, return ALL tokenized docs regardless
+        of existing lemma results (used for --target-status all).
+        """
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("invalid access to closed connection")
+
+            base = """
+                SELECT d.doc_id,
+                       d.path,
+                       o.artefact_id,
+                       o.path,
+                       o.status,
+                       o.updated_at,
+                       t.artefact_id,
+                       t.path,
+                       t.status,
+                       t.updated_at,
+                       NULL, NULL, 'pending', NULL
+                FROM documents d
+                JOIN ocr_results o      ON d.doc_id = o.doc_id AND o.status = 'ok'
+                JOIN tokenize_results t ON d.doc_id = t.doc_id AND t.status = 'ok'
+            """
+            params: list = []
+
+            if not include_processed:
+                base += """
+                    LEFT JOIN lemma_results lr
+                           ON d.doc_id = lr.doc_id AND lr.method = %s
+                    WHERE lr.doc_id IS NULL
+                """
+                params.append(lemmatizer)
+
+            if limit is not None:
+                base += " LIMIT %s"
+                params.append(limit)
+
+            with self._conn.cursor() as cur:
+                cur.execute(base, params)
+                return [_pdf_state_from_db_resp(row) for row in cur.fetchall()]
+
     def close(self):
         with self._lock:
             if self._conn is not None:
