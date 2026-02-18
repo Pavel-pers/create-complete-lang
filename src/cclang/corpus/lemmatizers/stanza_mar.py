@@ -7,10 +7,13 @@ from cclang.io.schemas import LemmaToken
 
 _THREAD_LOCAL = threading.local()
 
+
 class MahaNER:
     def __init__(self, model_name: str = "l3cube-pune/marathi-ner", offline: bool = True):
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=offline)
         self.model = AutoModelForTokenClassification.from_pretrained(model_name, local_files_only=offline)
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model.to(self.device)
         self.model.eval()
         self.id2label = self.model.config.id2label
         self.propn_labels = {'Person', 'Location', 'Organization'}
@@ -19,14 +22,16 @@ class MahaNER:
         """
         Принимает список токенов, возвращает метки для каждого.
         """
-        inputs = self.tokenizer(
+        encoding = self.tokenizer(
             tokens,
             is_split_into_words=True,
             return_tensors="pt",
-            truncation=True
+            truncation=True,
+            max_length=512
         )
 
-        word_ids = inputs.word_ids()
+        word_ids = encoding.word_ids()
+        inputs = {k: v.to(self.device) for k, v in encoding.items()}
 
         with torch.no_grad():
             outputs = self.model(**inputs)
@@ -76,7 +81,7 @@ class MarathiStanzaProcessor:
 
         Input:  ['मुंबईत', 'राहुलने', 'भाषण', 'केले']
         Output: [
-            {'token': 'मुंबईत', 'lemma': 'मुंबई', 'pos': 'PROPN', 'ner': 'Location', 'score': 0.99, 'is_propn': True},
+            LemmaToken(token='मुंबईत', lemma='मुंबई', pos='PROPN', ner_result='Location', ...),
             ...
         ]
         """
@@ -90,19 +95,20 @@ class MarathiStanzaProcessor:
                                lemma=word.lemma,
                                pos=word.upos,
                                analyses=[word.lemma],
-                               is_oov=False,
-                               is_ambiguous=False,
                                )
                 )
 
         # 2. NER через MahaNER
         ner_results = self.ner.predict_labels(tokens)
 
-        # 3. Объединяем
+        # 3. Объединяем NER-метки
         results = []
         for i, item in enumerate(stanza_results):
-            item.is_ne = ner_results[i]['label'] != "Other"
-            item.ner = ner_results[i]['label'] if item.is_ne else None
+            if i < len(ner_results):
+                ner_label = ner_results[i]['label']
+                is_ne = ner_label != "Other"
+                item.is_ne = is_ne
+                item.ner_result = ner_label if is_ne else None
             results.append(item)
 
         return results
@@ -110,9 +116,9 @@ class MarathiStanzaProcessor:
     def process_batch(self, sentences: list[list[str]]) -> list[list[LemmaToken]]:
         """
         Батчевая обработка нескольких предложений.
-        Оптимизировано: NER батчится по чанкам до 450 токенов (лимит BERT 512).
+        Оптимизировано: NER батчится по чанкам до 100 токенов (лимит BERT 512).
         """
-        MAX_NER_TOKENS = 100  # Conservative: BERT subword tokenization can expand 3-5x
+        MAX_NER_TOKENS = 80  # Conservative: BERT subword tokenization can expand 3-6x
 
         # 1. Stanza батч - лемматизация и POS
         doc = self.nlp(sentences)
@@ -164,28 +170,29 @@ class MarathiStanzaProcessor:
             sent_results = []
             for word_idx, word in enumerate(sentence.words):
                 ner_label = ner_slice[word_idx]['label'] if word_idx < len(ner_slice) else 'Other'
+                is_ne = ner_label != 'Other'
                 sent_results.append(LemmaToken(
                     token=word.text,
                     lemma=word.lemma,
                     pos=word.upos or None,
                     analyses=[word.lemma],
-                    is_oov=False,
-                    is_ambiguous=False,
-                    is_ne=ner_label != 'Other',
-                    ner_result=ner_label if ner_label != 'Other' else None
+                    is_ne=is_ne,
+                    ner_result=ner_label if is_ne else None
                 ))
 
             all_results.append(sent_results)
 
         return all_results
 
-def batch_stanza_lemmatize(sentences: list[list[str]]) -> list[list[LemmaToken]]:
-    return get_thread_local_stanza_prerocessor().process_batch(sentences)
 
-def get_thread_local_stanza_prerocessor() -> MarathiStanzaProcessor:
+def batch_stanza_lemmatize(sentences: list[list[str]]) -> list[list[LemmaToken]]:
+    return get_thread_local_stanza_preprocessor().process_batch(sentences)
+
+
+def get_thread_local_stanza_preprocessor() -> MarathiStanzaProcessor:
     """
     Create one Analyzer per thread to avoid shared-state issues and reduce init overhead.
     """
-    if not hasattr(_THREAD_LOCAL, "stanza_analyzers"):
+    if not hasattr(_THREAD_LOCAL, "stanza_processor"):
         _THREAD_LOCAL.stanza_processor = MarathiStanzaProcessor()
     return _THREAD_LOCAL.stanza_processor

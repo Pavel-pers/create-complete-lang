@@ -11,6 +11,7 @@ from queue import Empty, Queue
 from typing import Iterable, List, Optional, Dict, Callable
 
 import re
+import torch
 from dotenv import load_dotenv
 
 from cclang.common.logx import BoundLogger, get_logger, setup_logging
@@ -181,6 +182,8 @@ def _lemmatize_doc_stanza(doc: DocTok, log: BoundLogger, global_counters: Counte
                     filtered_sentence.append(token)
                 else:
                     local_counter.num_weird += 1
+                    if global_counters is not None:
+                        global_counters.bump("num_weird", log)
             if filtered_sentence:
                 filtered_batch.append(filtered_sentence)
             else:
@@ -200,13 +203,14 @@ def _lemmatize_doc_stanza(doc: DocTok, log: BoundLogger, global_counters: Counte
             else:
                 sentences.append(next(lemma_iter))
 
-    meta = { 
+    meta = {
         "source_tok_sha": doc.id,
         "lemmatizer": "stanza-marathi",
         "stats": {
             "num_sentences": len(sentences),
+            "num_tokens": sum(len(s) for s in sentences),
             "num_weird_token": local_counter.num_weird,
-        }
+        },
     }
     return DocLemma(id=doc.id, lang=doc.lang, sentences=sentences, meta=meta)
 
@@ -354,9 +358,10 @@ def run_pipeline(
 
                 result_queue.put(worker_result)
 
+        num_workers = 4 if torch.cuda.is_available() else 8
         work_threads = [
             threading.Thread(target=lemma_worker, args=(log.bind(thread_name=f"lemma_worker_{ind}"),))
-            for ind in range(8)
+            for ind in range(num_workers)
         ]
         for work_thread in work_threads:
             work_thread.start()
