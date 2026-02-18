@@ -231,7 +231,17 @@ class DocStateStore:
         with self._lock:
             conn = self._check_conn()
             with conn.cursor() as cur:
-                if target_status is None or target_status == ProcessingStatus.NOT_PROCESSED:
+                if target_status is None:
+                    # all — every tokenized doc regardless of lemma status
+                    query = """
+                        SELECT d.doc_id, t.path AS tokenize_path
+                        FROM documents d
+                        JOIN ocr_results o ON d.doc_id = o.doc_id AND o.status = 'ok'
+                        JOIN tokenize_results t ON d.doc_id = t.doc_id AND t.status = 'ok'
+                    """
+                    params: list = []
+                elif target_status == ProcessingStatus.NOT_PROCESSED:
+                    # pending — docs with no lemma result for this method
                     query = """
                         SELECT d.doc_id, t.path AS tokenize_path
                         FROM documents d
@@ -241,7 +251,7 @@ class DocStateStore:
                             ON d.doc_id = l.doc_id AND l.method = %s
                         WHERE l.doc_id IS NULL
                     """
-                    params: list = [method]
+                    params = [method]
                 else:
                     query = """
                         SELECT d.doc_id, t.path AS tokenize_path

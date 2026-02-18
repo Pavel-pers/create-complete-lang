@@ -8,9 +8,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from queue import Empty, Queue
-from typing import Iterable, List, Optional, Dict
+from typing import Iterable, List, Optional, Dict, Callable
 
 import re
+import torch
 from dotenv import load_dotenv
 
 from cclang.common.logx import BoundLogger, get_logger, setup_logging
@@ -32,6 +33,7 @@ from cclang.io.schemas import (
 )
 from cclang.models.tasks_queue import TaskQueue
 from cclang.corpus.lemmatizers.apertium_mar import lemmatize_marathi_token, batch_lemmatize_marathi
+from cclang.corpus.lemmatizers.stanza_mar import batch_stanza_lemmatize
 
 DEVANAGARI_RANGE = r"\u0900-\u097F"
 DEVANAGARI_DIGITS = r"\u0966-\u096F"
@@ -106,7 +108,7 @@ class Counters:
             logger.debug("counter threshold", extra={"counter": name, "value": current})
 
 
-def _lemmatize_doc(doc: DocTok, log: BoundLogger, global_counters: Counters | None) -> DocLemma:
+def _lemmatize_doc_appertium(doc: DocTok, log: BoundLogger, global_counters: Counters | None) -> DocLemma:
     """
     Instead of calling apertium once per token, collects all unique tokens
     and processes them in batches.
@@ -165,6 +167,54 @@ def _lemmatize_doc(doc: DocTok, log: BoundLogger, global_counters: Counters | No
     return DocLemma(id=doc.id, lang=doc.lang, sentences=sentences, meta=meta)
 
 
+def _lemmatize_doc_stanza(doc: DocTok, log: BoundLogger, global_counters: Counters | None):
+    local_counter = Counters()
+    sentences: List[List[LemmaToken]] = []
+    for batch_start in range(0, len(doc.sentences), 64):
+        batch = doc.sentences[batch_start:batch_start + 64]
+        # filter batch and track which sentences are non-empty
+        filtered_batch = []
+        empty_indices = set()
+        for sentence_i in range(len(batch)):
+            filtered_sentence = []
+            for token in batch[sentence_i]:
+                if not _is_weird_token(token):
+                    filtered_sentence.append(token)
+                else:
+                    local_counter.num_weird += 1
+                    if global_counters is not None:
+                        global_counters.bump("num_weird", log)
+            if filtered_sentence:
+                filtered_batch.append(filtered_sentence)
+            else:
+                empty_indices.add(sentence_i)
+
+        # Process non-empty sentences
+        if filtered_batch:
+            lemmatized = batch_stanza_lemmatize(filtered_batch)
+        else:
+            lemmatized = []
+
+        # Reconstruct results with empty lists for filtered-out sentences
+        lemma_iter = iter(lemmatized)
+        for sentence_i in range(len(batch)):
+            if sentence_i in empty_indices:
+                sentences.append([])
+            else:
+                sentences.append(next(lemma_iter))
+
+    meta = {
+        "source_tok_sha": doc.id,
+        "lemmatizer": "stanza-marathi",
+        "stats": {
+            "num_sentences": len(sentences),
+            "num_tokens": sum(len(s) for s in sentences),
+            "num_weird_token": local_counter.num_weird,
+        },
+    }
+    return DocLemma(id=doc.id, lang=doc.lang, sentences=sentences, meta=meta)
+
+
 def run_pipeline(
         output_base_path: Path,
         database_dsn: str | None,
@@ -174,6 +224,8 @@ def run_pipeline(
         max_count: int | None = None,
         data_path: Path = Path("data"),
         stop_event: threading.Event | None = None,
+        lemmatize_func: Callable[[DocTok, BoundLogger, Counters | None], DocLemma] = _lemmatize_doc_appertium,
+        lemmatizer_name: str = "apertium-mar-morph",
 ):
     data_path = Path(data_path)
     data_path.mkdir(parents=True, exist_ok=True)
@@ -200,14 +252,14 @@ def run_pipeline(
 
     manifest = storage_manager.register_manifest(manifest_path, LemmatizeManifestRecord)
     doc_store = DocStateStore(db_conn)
-    lemma_method = "apertium-mar-morph"
 
     try:
         log.info(
             "pipeline target tasks",
-            extra={"lemma_status": target_status, "method": lemma_method, "limit": max_count},
+            extra={"lemmatizer": lemmatizer_name,
+                   "target_status": target_status, "limit": max_count},
         )
-        tasks_filter = doc_store.get_lemma_tasks(target_status, method=lemma_method, limit=max_count)
+        tasks_filter = doc_store.get_lemma_tasks(target_status, method=lemmatizer_name, limit=max_count)
         task_queue: TaskQueue[LemmatizeTask] = TaskQueue(logger=log.bind(service="TaskQueue"))
         for task in tasks_filter:
             task_queue.put(task)
@@ -247,7 +299,7 @@ def run_pipeline(
                         doc_tok = DocTok.model_validate_json(stream.read())
 
                     worker_log.info('Started lemmatization', extra={"doc_id": task.doc_id})
-                    doc_lemma = _lemmatize_doc(doc_tok, worker_log, global_counters)
+                    doc_lemma = lemmatize_func(doc_tok, worker_log, global_counters)
                     worker_log.info('Finish lemmatization', extra={"doc_id": task.doc_id})
 
                     lemma_json = doc_lemma.model_dump_json(ensure_ascii=False)
@@ -299,9 +351,10 @@ def run_pipeline(
 
                 result_queue.put(worker_result)
 
+        num_workers = 4 if torch.cuda.is_available() else 8
         work_threads = [
             threading.Thread(target=lemma_worker, args=(log.bind(thread_name=f"lemma_worker_{ind}"),))
-            for ind in range(8)
+            for ind in range(num_workers)
         ]
         for work_thread in work_threads:
             work_thread.start()
@@ -333,7 +386,7 @@ def run_pipeline(
                     if storage_manager.save_cloud_enabled():
                         upload_callback = UploadArtifactCallback(
                             manifest, manifest_record, doc_store,
-                            LemmaStatus(result.doc_id, lemma_method,
+                            LemmaStatus(result.doc_id, lemmatizer_name,
                                         lemma_status, lemma_sha, str(lemma_path)))
                         storage_manager.finalize_artifact(result.temp_result_path, lemma_path,
                                                           blocking=False, callback=upload_callback)
@@ -343,15 +396,13 @@ def run_pipeline(
                         manifest.mark(manifest_record)
                         doc_store.upsert_lemma_result(
                             doc_id=result.doc_id,
-                            method=lemma_method,
+                            method=lemmatizer_name,
                             status=lemma_status,
                             artefact_id=lemma_sha,
                             path=str(lemma_path),
                             ts=datetime.now().isoformat() + 'Z'
                         )
                 elif result.status == ProcessedPdfStatus.ERROR:
-                    lemma_status = ProcessingStatus.ERROR
-
                     manifest_record = LemmatizeManifestRecord(
                         pdf_sha=result.doc_id,
                         tokenize_path=result.tokenize_path,
@@ -364,10 +415,10 @@ def run_pipeline(
 
                     doc_store.upsert_lemma_result(
                         doc_id=result.doc_id,
-                        method=lemma_method,
-                        status=lemma_status,
-                        artefact_id=lemma_sha,
-                        path=str(lemma_path) if lemma_path else None,
+                        method=lemmatizer_name,
+                        status=ProcessingStatus.ERROR,
+                        artefact_id=None,
+                        path=None,
                         ts=datetime.now().isoformat() + 'Z'
                     )
                 elif result.status == ProcessedPdfStatus.SKIPPED:
@@ -420,9 +471,9 @@ def main(argv: Iterable[str] | None = None) -> None:
     arg_parser.add_argument(
         "--target-status",
         "-st",
-        choices=["pending", "none", ProcessingStatus.OK.value, ProcessingStatus.ERROR.value],
+        choices=["pending", "none", "all", ProcessingStatus.OK.value, ProcessingStatus.ERROR.value],
         default="pending",
-        help="Which lemma_status to process (pending/none = not processed yet)",
+        help="Which lemma_status to process (pending/none = not processed yet, all = reprocess everything)",
     )
     arg_parser.add_argument("--log-format", "--log-fmt", choices=["console", "json"], default="console")
     arg_parser.add_argument("--log-level", "--log-lvl", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO")
@@ -437,10 +488,16 @@ def main(argv: Iterable[str] | None = None) -> None:
         type=Path,
         help="Root directory for pipeline artifacts (defaults to ./data)",
     )
+    arg_parser.add_argument("--lemmatize-func", choices=["apertium", "stanza"], default="apertium",)
 
     args = arg_parser.parse_args(argv)
 
-    manifest_path = args.manifest_path or Path("manifests/pl_lemmatization.jsonl")
+    lemmatizer_name_map = {
+        "apertium": "apertium-mar-morph",
+        "stanza": "stanza-marathi",
+    }
+    lemmatizer_name = lemmatizer_name_map[args.lemmatize_func]
+    manifest_path = args.manifest_path or Path(f"manifests/pl_{args.lemmatize_func}_lemmatization.jsonl")
     database_dsn = args.database_dsn
     data_path = args.data_path or Path("data")
 
@@ -454,10 +511,12 @@ def main(argv: Iterable[str] | None = None) -> None:
     )
     log = get_logger("root").bind(pipeline="lemmatization")
     max_count = args.head if args.head is not None else None
-    target_status = (
-        ProcessingStatus.NOT_PROCESSED if args.target_status in ("none", "pending") else ProcessingStatus(
-            args.target_status)
-    )
+    if args.target_status == "all":
+        target_status = None
+    elif args.target_status in ("none", "pending"):
+        target_status = ProcessingStatus.NOT_PROCESSED
+    else:
+        target_status = ProcessingStatus(args.target_status)
 
     # Set up graceful shutdown on SIGINT/SIGTERM
     stop_event = threading.Event()
@@ -485,6 +544,8 @@ def main(argv: Iterable[str] | None = None) -> None:
             max_count=max_count,
             data_path=data_path,
             stop_event=stop_event,
+            lemmatize_func=_lemmatize_doc_appertium if args.lemmatize_func == "apertium" else _lemmatize_doc_stanza,
+            lemmatizer_name=lemmatizer_name,
         )
     except KeyboardInterrupt:
         log.warning("interrupted by user")

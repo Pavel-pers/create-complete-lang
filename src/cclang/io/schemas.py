@@ -191,6 +191,10 @@ class LemmaToken(BaseModel):
     token: str
     lemma: str
     pos: Optional[str] = None
+
+    is_ne: bool = False
+    ner_result: Optional[str] = None
+
     analyses: Optional[List[str]] = None
     # for example: ["lemma<n><pl>", "lemma2<v><past>"]
     is_oov: bool = False
