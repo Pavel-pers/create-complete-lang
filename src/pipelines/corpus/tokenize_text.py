@@ -15,8 +15,8 @@ from cclang.config.s3 import load_s3_config
 from cclang.core.storage import StorageManager, CloudConfig
 from cclang.io.fs import LocalConfig, ensure_relative, get_shard_relative
 from cclang.io.db import get_conn
-from cclang.io.pdf_state_store import PdfStateStore
-from cclang.io.schemas import DocRaw, DocTok, ProcessingStatus, TokenizeManifestRecord
+from cclang.io.doc_state_store import DocStateStore
+from cclang.io.schemas import DocRaw, DocTok, TokenizeTask, ProcessingStatus, TokenizeManifestRecord
 from cclang.common.logx import BoundLogger, setup_logging, get_logger
 from cclang.io.exceptions import LocalStorageError, CloudStorageError
 from cclang.models.tasks_queue import TaskQueue
@@ -121,16 +121,13 @@ def run_pipeline(
     )
 
     manifest = storage.register_manifest(manifest_path, TokenizeManifestRecord)
-    pdf_states = PdfStateStore(db_conn)
+    doc_store = DocStateStore(db_conn)
 
-    log.info(f'pipeline target tasks: text_status={ProcessingStatus.OK}, tokenize_status= {target_status}, limit={max_count}')
-    tasks_filter = pdf_states.filter_by_status(text_status=ProcessingStatus.OK,
-                                               tokenize_status=target_status)
-    task_queue = TaskQueue(logger=log.bind(service='TaskQueue'))
+    log.info(f'pipeline target tasks: tokenize_status={target_status}, limit={max_count}')
+    tasks_filter = doc_store.get_tokenize_tasks(target_status, limit=max_count)
+    task_queue: TaskQueue[TokenizeTask] = TaskQueue(logger=log.bind(service='TaskQueue'))
     for task in tasks_filter:
         task_queue.put(task)
-        if max_count is not None and task_queue.qsize() >= max_count:
-            break
 
     result_queue: Queue[TokenizeManifestRecord]  = Queue()
 
@@ -149,14 +146,14 @@ def run_pipeline(
             result: TokenizeManifestRecord
 
             try:
-                tokenized_doc = tokenize_text(normalized_text_path, task.pdf_sha, worker_log, storage)
-                shard_relative_result = output_base_rel / get_shard_relative(task.pdf_sha, '.tok.json')
+                tokenized_doc = tokenize_text(normalized_text_path, task.doc_id, worker_log, storage)
+                shard_relative_result = output_base_rel / get_shard_relative(task.doc_id, '.tok.json')
                 tokenized_json = tokenized_doc.model_dump_json(ensure_ascii=False)
                 with storage.open(shard_relative_result, mode='w', encoding='utf-8') as stream:
                     stream.write(tokenized_json)
 
                 tokenize_sha = hashlib.sha256(tokenized_json.encode()).hexdigest()
-                result = TokenizeManifestRecord(pdf_sha=task.pdf_sha,
+                result = TokenizeManifestRecord(pdf_sha=task.doc_id,
                                                 text_path=str(normalized_text_path),
                                                 tokenize_path=str(shard_relative_result),
                                                 tokenize_sha=tokenize_sha,
@@ -170,7 +167,7 @@ def run_pipeline(
                 else:
                     worker_log.exception("unexpected error during tokenization", extra={"text-file": normalized_text_path})
 
-                result = TokenizeManifestRecord(pdf_sha=task.pdf_sha,
+                result = TokenizeManifestRecord(pdf_sha=task.doc_id,
                                                 text_path=str(normalized_text_path),
                                                 tokenize_path=None,
                                                 tokenize_sha=None,
@@ -202,11 +199,11 @@ def run_pipeline(
             else:
                 raise RuntimeError('unexpected tokenizer behavior')
 
-            pdf_states.update_tokenize_status(
-                pdf_sha=result.pdf_sha,
-                tokenize_status=tokenize_status,
-                tokenize_sha=result.tokenize_sha,
-                tokenize_path=result.tokenize_path,
+            doc_store.upsert_tokenize_result(
+                doc_id=result.pdf_sha,
+                status=tokenize_status,
+                artefact_id=result.tokenize_sha,
+                path=result.tokenize_path,
                 ts=result.ts,
             )
         except Empty:
@@ -222,7 +219,7 @@ def run_pipeline(
 
     log.info("tokenize text completed, closing files")
     manifest.flush()
-    pdf_states.close()
+    doc_store.close()
     storage.close()
     log.info("files closed")
 

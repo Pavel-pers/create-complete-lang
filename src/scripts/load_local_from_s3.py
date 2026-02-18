@@ -7,25 +7,21 @@ from itertools import islice
 
 from cclang.common import logx
 from cclang.config.s3 import load_s3_config
-from cclang.io.pdf_state_store import PdfStateStore
+from cclang.io.doc_state_store import DocStateStore
 from cclang.io.db import get_conn
 from cclang.ingest.fs import FileManager, LocalConfig, CloudConfig, ensure_relative
-from cclang.io.schemas import ProcessingStatus
 
 logger = logx.get_logger(__name__)
 
 
-def get_pdfs_path(pdf_state: PdfStateStore)->Iterable[Path]:
-    rows = pdf_state.filter_by_status()
-    return map(lambda row: Path(row.pdf_path), filter(lambda row: row.pdf_path is not None, rows))
+def get_pdfs_path(store: DocStateStore) -> Iterable[Path]:
+    return [Path(p) for p in store.get_all_doc_paths()]
 
-def get_raw_text_path(pdf_state: PdfStateStore)->Iterable[Path]:
-    rows = pdf_state.filter_by_text_status(ProcessingStatus.OK)
-    return map(lambda row: Path(row.text_path), filter(lambda row: row.text_path is not None, rows))
+def get_raw_text_path(store: DocStateStore) -> Iterable[Path]:
+    return [Path(p) for p in store.get_completed_ocr_paths()]
 
-def get_tokenize_text_path(pdf_state: PdfStateStore)->Iterable[Path]:
-    rows = pdf_state.filter_by_tokenize_status(ProcessingStatus.OK)
-    return map(lambda row: Path(row.tokenize_path), filter(lambda row: row.tokenize_path is not None, rows))
+def get_tokenize_text_path(store: DocStateStore) -> Iterable[Path]:
+    return [Path(p) for p in store.get_completed_tokenize_paths()]
 
 parser_targeting = {
     'pdf': get_pdfs_path,
@@ -70,14 +66,14 @@ def main(argv: Iterable[str] | None = None) -> None:
         raise RuntimeError("S3 access is disabled. Set CCLANG_S3_ENABLE=true to download files.")
 
     db_conn = get_conn(db_dsn)
-    pdf_state = PdfStateStore(db_conn)
+    doc_store = DocStateStore(db_conn)
     local_conf = LocalConfig(data_path, True, True, data_path / "temp/load_local_from_s3")
     cloud_conf = CloudConfig(s3_config.enable, base_path=Path("data"), max_upload_threads=2, s3_config=s3_config)
     file_manager = FileManager(local_conf, cloud_conf)
 
     logger.info("Starting download", extra={"stage": args.stage, "data_path": str(data_path), "overwrite": args.overwrite})
 
-    target_paths = list(islice(parser_targeting[args.stage](pdf_state), args.head))
+    target_paths = list(islice(parser_targeting[args.stage](doc_store), args.head))
     logger.info("Total targets resolved", extra={"count": len(target_paths)})
 
     for target_rel_path in target_paths:

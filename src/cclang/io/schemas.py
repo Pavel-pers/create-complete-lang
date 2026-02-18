@@ -21,28 +21,38 @@ class ProcessingStatus(str, Enum):
     ERROR = "error"
     NOT_PROCESSED = "pending"
 
-class PdfState(BaseModel):
-    pdf_sha: str
+# ---------- Normalized DB task/result models --------
+
+class OcrTask(BaseModel):
+    doc_id: str
     pdf_path: str
 
-    text_sha: Optional[str] = None
-    text_path: Optional[str] = None
-    text_status: ProcessingStatus = Field(default=ProcessingStatus.NOT_PROCESSED)
-    text_updated_at: Optional[str] = None
 
-    tokenize_sha: Optional[str] = None
-    tokenize_path: Optional[str] = None
-    tokenize_status: ProcessingStatus = Field(default=ProcessingStatus.NOT_PROCESSED)
-    tokenize_updated_at: Optional[str] = None
+class TokenizeTask(BaseModel):
+    doc_id: str
+    text_path: str
 
-    lemma_sha: Optional[str] = None
-    lemma_path: Optional[str] = None
-    lemma_status: ProcessingStatus = Field(default=ProcessingStatus.NOT_PROCESSED)
-    lemma_updated_at: Optional[str] = None
 
-    PROCESSING_STATUS_OK: ClassVar[ProcessingStatus] = ProcessingStatus.OK
-    PROCESSING_STATUS_ERROR: ClassVar[ProcessingStatus] = ProcessingStatus.ERROR
-    PROCESSING_STATUS_NOT_PROCESSED: ClassVar[ProcessingStatus] = ProcessingStatus.NOT_PROCESSED
+class LemmatizeTask(BaseModel):
+    doc_id: str
+    tokenize_path: str
+
+
+class LemmaResult(BaseModel):
+    doc_id: str
+    method: str
+    artefact_id: Optional[str] = None
+    status: ProcessingStatus = Field(default=ProcessingStatus.OK)
+    path: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class OcrResult(BaseModel):
+    doc_id: str
+    artefact_id: Optional[str] = None
+    status: ProcessingStatus = Field(default=ProcessingStatus.OK)
+    path: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 # ---------- Manifest --------

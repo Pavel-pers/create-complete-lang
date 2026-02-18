@@ -4,9 +4,6 @@ from __future__ import annotations
 import os
 from typing import Final
 import psycopg
-from psycopg import sql
-
-from cclang.io.schemas import ProcessingStatus
 
 DB_DSN_ENV: Final[str] = "CCLANG_DB_DSN"
 
@@ -22,9 +19,66 @@ def get_conn(database_dsn: str | None) -> psycopg.Connection:
     return conn
 
 
+def _migrate_pdf_state(conn: psycopg.Connection) -> None:
+    """If the legacy ``pdf_state`` table exists, copy data into the new
+    normalized tables and rename it to ``pdf_state_old``."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_name = 'pdf_state'
+            )
+            """
+        )
+        row = cur.fetchone()
+        if not row or not row[0]:
+            return
+
+        # Copy documents
+        cur.execute(
+            """
+            INSERT INTO documents (doc_id, path)
+            SELECT pdf_sha, pdf_path FROM pdf_state
+            ON CONFLICT (doc_id) DO NOTHING
+            """
+        )
+        # Copy ocr_results (only rows that were actually processed)
+        cur.execute(
+            """
+            INSERT INTO ocr_results (doc_id, artefact_id, status, path, updated_at)
+            SELECT pdf_sha, text_sha, text_status, text_path, text_updated_at
+            FROM pdf_state
+            WHERE text_status IN ('ok', 'error')
+            ON CONFLICT (doc_id) DO NOTHING
+            """
+        )
+        # Copy tokenize_results
+        cur.execute(
+            """
+            INSERT INTO tokenize_results (doc_id, artefact_id, status, path, updated_at)
+            SELECT pdf_sha, tokenize_sha, tokenize_status, tokenize_path, tokenize_updated_at
+            FROM pdf_state
+            WHERE tokenize_status IN ('ok', 'error')
+            ON CONFLICT (doc_id) DO NOTHING
+            """
+        )
+        # Copy lemma_results (default method for legacy data)
+        cur.execute(
+            """
+            INSERT INTO lemma_results (doc_id, method, artefact_id, status, path, updated_at)
+            SELECT pdf_sha, 'apertium-mar-morph', lemma_sha, lemma_status, lemma_path, lemma_updated_at
+            FROM pdf_state
+            WHERE lemma_status IN ('ok', 'error')
+            ON CONFLICT (doc_id, method) DO NOTHING
+            """
+        )
+        # Rename old table
+        cur.execute("ALTER TABLE pdf_state RENAME TO pdf_state_old")
+    conn.commit()
+
+
 def ensure_schema(conn: psycopg.Connection) -> None:
-    """
-    """
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -46,80 +100,88 @@ def ensure_schema(conn: psycopg.Connection) -> None:
             "CREATE INDEX IF NOT EXISTS idx_fetch_items_sha256 "
             "ON fetch_items (sha256);"
         )
-        cur.execute("""
-                    CREATE TABLE IF NOT EXISTS pdf_state
-                    (
-                        pdf_sha       TEXT PRIMARY KEY,
-                        pdf_path      TEXT NOT NULL,
-                        
-                        text_sha      TEXT,
-                        text_path     TEXT,
-                        text_status   TEXT NOT NULL DEFAULT 'pending',
-                        text_updated_at TIMESTAMPTZ,
-                        
-                        tokenize_sha    TEXT,
-                        tokenize_path   TEXT,
-                        tokenize_status TEXT NOT NULL DEFAULT 'pending',
-                        tokenize_updated_at TIMESTAMPTZ,
-                        
-                        lemma_sha       TEXT,
-                        lemma_path      TEXT,
-                        lemma_status    TEXT NOT NULL DEFAULT 'pending',
-                        lemma_updated_at TIMESTAMPTZ
-                    );
-                    """)
-        # Normalize NULL statuses to NOT_PROCESSED and enforce defaults/not-null.
+
+        # ---------- normalized tables ----------
+
         cur.execute(
             """
-            UPDATE pdf_state
-            SET text_status = %s
-            WHERE text_status IS NULL
-            """,
-            (ProcessingStatus.NOT_PROCESSED,),
-        )
-        cur.execute(
+            CREATE TABLE IF NOT EXISTS documents
+            (
+                doc_id TEXT PRIMARY KEY,
+                path   TEXT NOT NULL
+            );
             """
-            UPDATE pdf_state
-            SET tokenize_status = %s
-            WHERE tokenize_status IS NULL
-            """,
-            (ProcessingStatus.NOT_PROCESSED,),
-        )
-        cur.execute(
-            """
-            UPDATE pdf_state
-            SET lemma_status = %s
-            WHERE lemma_status IS NULL
-            """,
-            (ProcessingStatus.NOT_PROCESSED,),
         )
 
         cur.execute(
-          "CREATE INDEX IF NOT EXISTS idx_pdf_state_text_sha "
-          "ON pdf_state (text_sha);"
+            """
+            CREATE TABLE IF NOT EXISTS ocr_results
+            (
+                doc_id      TEXT PRIMARY KEY REFERENCES documents(doc_id),
+                artefact_id TEXT,
+                status      TEXT NOT NULL DEFAULT 'ok',
+                path        TEXT,
+                updated_at  TIMESTAMPTZ
+            );
+            """
         )
         cur.execute(
-          "CREATE INDEX IF NOT EXISTS idx_pdf_state_text_status "
-          "ON pdf_state (text_status);"
+            "CREATE INDEX IF NOT EXISTS idx_ocr_results_status "
+            "ON ocr_results (status);"
         )
         cur.execute(
-          "CREATE INDEX IF NOT EXISTS idx_pdf_state_tokenize_sha "
-          "ON pdf_state (tokenize_sha);"
+            "CREATE INDEX IF NOT EXISTS idx_ocr_results_artefact_id "
+            "ON ocr_results (artefact_id);"
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tokenize_results
+            (
+                doc_id      TEXT PRIMARY KEY REFERENCES documents(doc_id),
+                artefact_id TEXT,
+                status      TEXT NOT NULL DEFAULT 'ok',
+                path        TEXT,
+                updated_at  TIMESTAMPTZ
+            );
+            """
         )
         cur.execute(
-          "CREATE INDEX IF NOT EXISTS idx_pdf_state_tokenize_status "
-          "ON pdf_state (tokenize_status);"
+            "CREATE INDEX IF NOT EXISTS idx_tokenize_results_status "
+            "ON tokenize_results (status);"
         )
         cur.execute(
-          "CREATE INDEX IF NOT EXISTS idx_pdf_state_lemma_sha "
-          "ON pdf_state (lemma_sha);"
+            "CREATE INDEX IF NOT EXISTS idx_tokenize_results_artefact_id "
+            "ON tokenize_results (artefact_id);"
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS lemma_results
+            (
+                doc_id      TEXT NOT NULL REFERENCES documents(doc_id),
+                method      TEXT NOT NULL,
+                artefact_id TEXT,
+                status      TEXT NOT NULL DEFAULT 'ok',
+                path        TEXT,
+                updated_at  TIMESTAMPTZ,
+                PRIMARY KEY (doc_id, method)
+            );
+            """
         )
         cur.execute(
-          "CREATE INDEX IF NOT EXISTS idx_pdf_state_lemma_status "
-          "ON pdf_state (lemma_status);"
+            "CREATE INDEX IF NOT EXISTS idx_lemma_results_status "
+            "ON lemma_results (status);"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lemma_results_artefact_id "
+            "ON lemma_results (artefact_id);"
         )
 
     conn.commit()
+
+    # Migrate legacy data if pdf_state still exists
+    _migrate_pdf_state(conn)
 
 
 """

@@ -51,7 +51,7 @@ if "psycopg" not in sys.modules:
 from cclang.common.logx import get_logger
 from cclang.config.s3 import S3Config
 from cclang.io.fs import get_shard_relative
-from cclang.io.schemas import DocRaw, DocTok, PdfState, ProcessingStatus
+from cclang.io.schemas import DocRaw, DocTok, TokenizeTask, ProcessingStatus
 from pipelines.corpus import tokenize_text
 
 
@@ -78,31 +78,28 @@ def test_run_pipeline_writes_output_and_updates_state(monkeypatch, tmp_path: Pat
 
     pdf_sha = hashlib.sha256(b"sample-pdf").hexdigest()
     tasks = [
-        PdfState(
-            pdf_sha=pdf_sha,
-            pdf_path="ignored.pdf",
-            text_sha="textsha",
+        TokenizeTask(
+            doc_id=pdf_sha,
             text_path=str(text_rel),
-            text_status=ProcessingStatus.OK,
         )
     ]
     updated_calls: list[tuple] = []
 
-    class FakePdfStateStore:
+    class FakeDocStateStore:
         def __init__(self, _conn):
             self._closed = False
 
-        def filter_by_status(self, text_status=None, tokenize_status=None):
+        def get_tokenize_tasks(self, target_status=None, limit=None):
             return tasks
 
-        def update_tokenize_status(self, pdf_sha, tokenize_status, tokenize_sha, tokenize_path, ts):
-            updated_calls.append((pdf_sha, tokenize_status, tokenize_sha, tokenize_path, ts))
+        def upsert_tokenize_result(self, doc_id, status, artefact_id, path, ts):
+            updated_calls.append((doc_id, status, artefact_id, path, ts))
 
         def close(self):
             self._closed = True
 
     # Disable real DB and S3
-    monkeypatch.setattr(tokenize_text, "PdfStateStore", FakePdfStateStore)
+    monkeypatch.setattr(tokenize_text, "DocStateStore", FakeDocStateStore)
     monkeypatch.setattr(tokenize_text, "get_conn", lambda _: None)
     monkeypatch.setattr(
         tokenize_text,

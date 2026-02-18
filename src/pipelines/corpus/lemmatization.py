@@ -15,16 +15,17 @@ from dotenv import load_dotenv
 
 from cclang.common.logx import BoundLogger, get_logger, setup_logging
 from cclang.config.s3 import load_s3_config
-from cclang.io.cloud import S3JobCallback, DefaultUploadCallback, S3Mapping
+from cclang.io.cloud import DefaultUploadCallback, S3Mapping
 from cclang.io.exceptions import CloudStorageError, LocalStorageError
 from cclang.core.storage import StorageManager, CloudConfig
 from cclang.core.manifest import ManifestStore
 from cclang.io.fs import LocalConfig, ensure_relative, get_shard_relative
 from cclang.io.db import get_conn
-from cclang.io.pdf_state_store import PdfStateStore
+from cclang.io.doc_state_store import DocStateStore
 from cclang.io.schemas import (
     DocLemma,
     DocTok,
+    LemmatizeTask,
     LemmaToken,
     LemmatizeManifestRecord,
     ProcessingStatus, ProcessedPdfStatus,
@@ -38,7 +39,8 @@ DEVANAGARI_DIGITS = r"\u0966-\u096F"
 
 @dataclass
 class LemmaStatus:
-    pdf_sha: str
+    doc_id: str
+    method: str
     lemma_status: ProcessingStatus
     lemma_sha: Optional[str] = None
     lemma_path: Optional[str] = None
@@ -49,7 +51,7 @@ _callback_logger = get_logger(__name__)
 
 class UploadArtifactCallback(DefaultUploadCallback):
     def __init__(self, manifest_store: ManifestStore, record_on_success: LemmatizeManifestRecord,
-                 database: PdfStateStore, db_update_info: LemmaStatus):
+                 database: DocStateStore, db_update_info: LemmaStatus):
         super().__init__()
         self.manifest_store = manifest_store
         self.record = record_on_success
@@ -59,11 +61,12 @@ class UploadArtifactCallback(DefaultUploadCallback):
     def on_success(self, mapping: S3Mapping, extra: Optional[Dict] = None) -> None:
         super().on_success(mapping, extra)
         self.manifest_store.mark(self.record)
-        self.database.update_lemma_status(
-            pdf_sha=self.db_update_info.pdf_sha,
-            lemma_status=self.db_update_info.lemma_status,
-            lemma_sha=self.db_update_info.lemma_sha,
-            lemma_path=self.db_update_info.lemma_path,
+        self.database.upsert_lemma_result(
+            doc_id=self.db_update_info.doc_id,
+            method=self.db_update_info.method,
+            status=self.db_update_info.lemma_status,
+            artefact_id=self.db_update_info.lemma_sha,
+            path=self.db_update_info.lemma_path,
             ts=datetime.now().isoformat() + 'Z'
         )
 
@@ -80,7 +83,7 @@ def _is_weird_token(token: str) -> bool:
 
 @dataclass
 class LemmatizeWorkerResult:
-    pdf_sha: str
+    doc_id: str
     tokenize_path: str
     status: ProcessedPdfStatus
     temp_result_path: Optional[Path]
@@ -196,22 +199,18 @@ def run_pipeline(
     storage_manager = StorageManager(loc_cfg, cloud_cfg)
 
     manifest = storage_manager.register_manifest(manifest_path, LemmatizeManifestRecord)
-    pdf_states = PdfStateStore(db_conn)
+    doc_store = DocStateStore(db_conn)
+    lemma_method = "apertium-mar-morph"
 
     try:
         log.info(
             "pipeline target tasks",
-            extra={"text_status": ProcessingStatus.OK, "tokenize_status": ProcessingStatus.OK,
-                   "lemma_status": target_status, "limit": max_count},
+            extra={"lemma_status": target_status, "method": lemma_method, "limit": max_count},
         )
-        tasks_filter = pdf_states.filter_by_status(text_status=ProcessingStatus.OK,
-                                                   tokenize_status=ProcessingStatus.OK,
-                                                   lemma_status=target_status)
-        task_queue: TaskQueue = TaskQueue(logger=log.bind(service="TaskQueue"))
+        tasks_filter = doc_store.get_lemma_tasks(target_status, method=lemma_method, limit=max_count)
+        task_queue: TaskQueue[LemmatizeTask] = TaskQueue(logger=log.bind(service="TaskQueue"))
         for task in tasks_filter:
             task_queue.put(task)
-            if max_count is not None and task_queue.qsize() >= max_count:
-                break
 
         result_queue: Queue[LemmatizeWorkerResult] = Queue()
         global_counters = Counters() if log.isEnabledFor(logging.DEBUG) else None
@@ -236,7 +235,7 @@ def run_pipeline(
                 tokenized_path_raw = str(task.tokenize_path).replace("\\", "/")
                 normalized_tok_path = ensure_relative(Path(tokenized_path_raw), data_path, "tokenize_path")
                 worker_result: LemmatizeWorkerResult = LemmatizeWorkerResult(
-                    pdf_sha=task.pdf_sha,
+                    doc_id=task.doc_id,
                     tokenize_path=str(normalized_tok_path),
                     status=ProcessedPdfStatus.SKIPPED,
                     temp_result_path=None)
@@ -247,17 +246,17 @@ def run_pipeline(
                     with storage_manager.open(normalized_tok_path, mode="r", encoding="utf-8") as stream:
                         doc_tok = DocTok.model_validate_json(stream.read())
 
-                    worker_log.info('Started lemmatization', extra={"pdf-sha": task.pdf_sha})
+                    worker_log.info('Started lemmatization', extra={"doc_id": task.doc_id})
                     doc_lemma = _lemmatize_doc(doc_tok, worker_log, global_counters)
-                    worker_log.info('Finish lemmatization', extra={"pdf-sha": task.pdf_sha})
+                    worker_log.info('Finish lemmatization', extra={"doc_id": task.doc_id})
 
                     lemma_json = doc_lemma.model_dump_json(ensure_ascii=False)
                     with open(temp_dist, mode="w", encoding="utf-8") as stream:
                         stream.write(lemma_json)
 
-                    worker_log.info('Lemmatization was successful. Saved local', extra={"pdf-sha": task.pdf_sha})
+                    worker_log.info('Lemmatization was successful. Saved local', extra={"doc_id": task.doc_id})
                     worker_result = LemmatizeWorkerResult(
-                        pdf_sha=task.pdf_sha,
+                        doc_id=task.doc_id,
                         tokenize_path=str(normalized_tok_path),
                         status=ProcessedPdfStatus.OK,
                         temp_result_path=temp_dist,
@@ -284,7 +283,7 @@ def run_pipeline(
                         )
 
                     worker_result = LemmatizeWorkerResult(
-                        pdf_sha=task.pdf_sha,
+                        doc_id=task.doc_id,
                         tokenize_path=str(normalized_tok_path),
                         status=ProcessedPdfStatus.ERROR,
                         temp_result_path=None,
@@ -319,29 +318,42 @@ def run_pipeline(
                 lemma_status: ProcessingStatus = ProcessingStatus.NOT_PROCESSED
 
                 if result.status == ProcessedPdfStatus.OK:
-                    lemma_path = output_base_rel / get_shard_relative(result.pdf_sha, ".lemma.json")
+                    lemma_path = output_base_rel / get_shard_relative(result.doc_id, ".lemma.json")
                     lemma_sha = hashlib.sha256(result.temp_result_path.read_bytes()).hexdigest()
                     lemma_status = ProcessingStatus.OK
 
                     manifest_record = LemmatizeManifestRecord(
-                        pdf_sha=result.pdf_sha,
+                        pdf_sha=result.doc_id,
                         tokenize_path=result.tokenize_path,
                         status=result.status,
                         lemma_path=str(lemma_path),
                         lemma_sha=lemma_sha
                     )
-                    upload_callback = UploadArtifactCallback(manifest, manifest_record,
-                                                             pdf_states, LemmaStatus(result.pdf_sha,
-                                                                                     lemma_status,
-                                                                                     lemma_sha,
-                                                                                     str(lemma_path)))
-                    storage_manager.finalize_artifact(result.temp_result_path, lemma_path,
-                                                      blocking=False, callback=upload_callback)
+
+                    if storage_manager.save_cloud_enabled():
+                        upload_callback = UploadArtifactCallback(
+                            manifest, manifest_record, doc_store,
+                            LemmaStatus(result.doc_id, lemma_method,
+                                        lemma_status, lemma_sha, str(lemma_path)))
+                        storage_manager.finalize_artifact(result.temp_result_path, lemma_path,
+                                                          blocking=False, callback=upload_callback)
+                    else:
+                        storage_manager.finalize_artifact(result.temp_result_path, lemma_path,
+                                                          blocking=True)
+                        manifest.mark(manifest_record)
+                        doc_store.upsert_lemma_result(
+                            doc_id=result.doc_id,
+                            method=lemma_method,
+                            status=lemma_status,
+                            artefact_id=lemma_sha,
+                            path=str(lemma_path),
+                            ts=datetime.now().isoformat() + 'Z'
+                        )
                 elif result.status == ProcessedPdfStatus.ERROR:
                     lemma_status = ProcessingStatus.ERROR
 
                     manifest_record = LemmatizeManifestRecord(
-                        pdf_sha=result.pdf_sha,
+                        pdf_sha=result.doc_id,
                         tokenize_path=result.tokenize_path,
                         status=result.status,
                         lemma_path=None,
@@ -350,16 +362,17 @@ def run_pipeline(
                     )
                     manifest.mark(manifest_record)
 
-                    pdf_states.update_lemma_status(
-                        pdf_sha=result.pdf_sha,
-                        lemma_status=lemma_status,
-                        lemma_sha=lemma_sha,
-                        lemma_path=lemma_path,
+                    doc_store.upsert_lemma_result(
+                        doc_id=result.doc_id,
+                        method=lemma_method,
+                        status=lemma_status,
+                        artefact_id=lemma_sha,
+                        path=str(lemma_path) if lemma_path else None,
                         ts=datetime.now().isoformat() + 'Z'
                     )
                 elif result.status == ProcessedPdfStatus.SKIPPED:
                     # SKIPPED should not reach here in normal operation
-                    log.warning("unexpected SKIPPED status received", extra={"pdf_sha": result.pdf_sha})
+                    log.warning("unexpected SKIPPED status received", extra={"doc_id": result.doc_id})
             except Empty:
                 if task_queue.unfinished_tasks == 0 and result_queue.empty():
                     break
@@ -381,8 +394,8 @@ def run_pipeline(
         )
     finally:
         manifest.flush()
-        storage_manager.close()  # Wait for uploads + callbacks first (they write to pdf_states)
-        pdf_states.close()       # Now safe to close DB connection
+        storage_manager.close()  # Wait for uploads + callbacks first (they write to doc_store)
+        doc_store.close()        # Now safe to close DB connection
         log.info("files closed")
 
 

@@ -17,8 +17,8 @@ from cclang.config.s3 import load_s3_config
 from cclang.core.storage import CloudConfig, StorageManager
 from cclang.io.db import get_conn
 from cclang.io.fs import LocalConfig
-from cclang.io.pdf_state_store import PdfStateStore
-from cclang.io.schemas import DocLemma, ProcessingStatus
+from cclang.io.doc_state_store import DocStateStore
+from cclang.io.schemas import DocLemma
 
 logger = logx.get_logger(__name__)
 
@@ -71,7 +71,7 @@ def collect_stats(
 
     # Connect to database
     db_conn = get_conn(db_dsn)
-    pdf_states = PdfStateStore(db_conn)
+    doc_store = DocStateStore(db_conn)
 
     # Statistics accumulators
     total_tokens = 0
@@ -81,10 +81,10 @@ def collect_stats(
     unique_lemmas_per_doc: list[int] = []
 
     try:
-        # Query all documents with lemma_status=OK
-        docs = pdf_states.filter_by_status(lemma_status=ProcessingStatus.OK)
+        # Query all documents with completed lemma results
+        docs = doc_store.get_completed_lemma_results()
 
-        for pdf_state in docs:
+        for result in docs:
             if stop_event.is_set():
                 logger.warning("Stop requested, returning partial results")
                 break
@@ -93,11 +93,11 @@ def collect_stats(
                 logger.info("Reached document limit", extra={"head": head})
                 break
 
-            lemma_path = pdf_state.lemma_path
+            lemma_path = result.path
             if not lemma_path:
                 logger.warning(
                     "Document has no lemma_path",
-                    extra={"pdf_sha": pdf_state.pdf_sha},
+                    extra={"doc_id": result.doc_id},
                 )
                 continue
 
@@ -107,7 +107,7 @@ def collect_stats(
             except FileNotFoundError:
                 logger.warning(
                     "Lemma file not found",
-                    extra={"lemma_path": lemma_path, "pdf_sha": pdf_state.pdf_sha},
+                    extra={"lemma_path": lemma_path, "doc_id": result.doc_id},
                 )
                 continue
             except Exception as e:
@@ -145,7 +145,7 @@ def collect_stats(
 
     finally:
         storage.close()
-        pdf_states.close()
+        doc_store.close()
 
     # Convert min_df to absolute count if it's a proportion
     if isinstance(min_df, float) and 0.0 <= min_df <= 1.0:

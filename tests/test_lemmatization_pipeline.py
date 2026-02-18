@@ -61,8 +61,8 @@ if "apertium" not in sys.modules:
 
 from cclang.common.logx import get_logger
 from cclang.config.s3 import S3Config
-from cclang.ingest.fs import get_shard_relative
-from cclang.io.schemas import DocTok, DocLemma, LemmaToken, PdfState, ProcessingStatus
+from cclang.io.fs import get_shard_relative
+from cclang.io.schemas import DocTok, DocLemma, LemmaToken, LemmatizeTask, ProcessingStatus
 from pipelines.corpus import lemmatization
 
 
@@ -81,25 +81,22 @@ def test_run_pipeline_writes_output_and_updates_state(monkeypatch, tmp_path: Pat
 
     pdf_sha = hashlib.sha256(b"sample-pdf").hexdigest()
     tasks = [
-        PdfState(
-            pdf_sha=pdf_sha,
-            pdf_path="ignored.pdf",
-            text_status=ProcessingStatus.OK,
-            tokenize_status=ProcessingStatus.OK,
+        LemmatizeTask(
+            doc_id=pdf_sha,
             tokenize_path=str(tokenize_rel),
         )
     ]
     updated_calls: list[tuple] = []
 
-    class FakePdfStateStore:
+    class FakeDocStateStore:
         def __init__(self, _conn):
             self._closed = False
 
-        def filter_by_status(self, text_status=None, tokenize_status=None, lemma_status=None):
+        def get_lemma_tasks(self, target_status=None, method=None, limit=None):
             return tasks
 
-        def update_lemma_status(self, pdf_sha, lemma_status, lemma_sha, lemma_path, ts):
-            updated_calls.append((pdf_sha, lemma_status, lemma_sha, lemma_path, ts))
+        def upsert_lemma_result(self, doc_id, method, status, artefact_id, path, ts):
+            updated_calls.append((doc_id, method, status, artefact_id, path, ts))
 
         def close(self):
             self._closed = True
@@ -107,8 +104,11 @@ def test_run_pipeline_writes_output_and_updates_state(monkeypatch, tmp_path: Pat
     def fake_lemmatize(token: str) -> LemmaToken:
         return LemmaToken(token=token, lemma=f"{token}_lemma")
 
+    def fake_batch_lemmatize(tokens: list, batch_size: int = 50) -> dict:
+        return {tok: fake_lemmatize(tok) for tok in tokens}
+
     # Disable real DB/S3 and heavy lemmatizer
-    monkeypatch.setattr(lemmatization, "PdfStateStore", FakePdfStateStore)
+    monkeypatch.setattr(lemmatization, "DocStateStore", FakeDocStateStore)
     monkeypatch.setattr(lemmatization, "get_conn", lambda _: None)
     monkeypatch.setattr(
         lemmatization,
@@ -118,6 +118,7 @@ def test_run_pipeline_writes_output_and_updates_state(monkeypatch, tmp_path: Pat
         ),
     )
     monkeypatch.setattr(lemmatization, "lemmatize_marathi_token", fake_lemmatize)
+    monkeypatch.setattr(lemmatization, "batch_lemmatize_marathi", fake_batch_lemmatize)
 
     log = get_logger("test")
 
@@ -149,9 +150,14 @@ def test_run_pipeline_writes_output_and_updates_state(monkeypatch, tmp_path: Pat
     assert Path(record["lemma_path"]) == expected_rel
     assert record["tokenize_path"] == str(tokenize_rel)
 
-    assert updated_calls == [
-        (pdf_sha, ProcessingStatus.OK, expected_sha, str(expected_rel), record["ts"])
-    ]
+    assert len(updated_calls) == 1
+    call = updated_calls[0]
+    assert call[0] == pdf_sha           # doc_id
+    assert call[1] == "apertium-mar-morph"  # method
+    assert call[2] == ProcessingStatus.OK   # status
+    assert call[3] == expected_sha      # artefact_id
+    assert call[4] == str(expected_rel)  # path
+    assert isinstance(call[5], str)     # ts
 
     parsed = DocLemma.model_validate_json(content)
     assert parsed.sentences

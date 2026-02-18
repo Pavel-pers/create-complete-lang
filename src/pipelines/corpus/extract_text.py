@@ -16,8 +16,8 @@ from cclang.config.s3 import load_s3_config
 from cclang.core.storage import StorageManager, CloudConfig
 from cclang.io.fs import LocalConfig, ensure_relative, get_shard_relative, calculate_sha256
 from cclang.io.db import get_conn
-from cclang.io.pdf_state_store import PdfStateStore
-from cclang.io.schemas import PdfState, ProcessingStatus, ProcessedPdfManifestRecord, DocRaw
+from cclang.io.doc_state_store import DocStateStore
+from cclang.io.schemas import OcrTask, ProcessingStatus, ProcessedPdfManifestRecord, DocRaw
 from cclang.models.tasks_queue import TaskQueue
 
 OCR_DPI = 300
@@ -165,18 +165,16 @@ def run_pipeline(
     )
 
     manifest = storage.register_manifest(manifest_path, ProcessedPdfManifestRecord)
-    pdf_states = PdfStateStore(db_conn)
+    doc_store = DocStateStore(db_conn)
     try:
         if sync_with_fetched_items:
-            pdf_states.sync_with_fetched_items()
+            doc_store.sync_documents_from_fetch_items()
 
-        task_queue: TaskQueue[PdfState] = TaskQueue(log.bind(service='TaskQueue'))
-        tasks = pdf_states.filter_by_text_status(target_status)
+        task_queue: TaskQueue[OcrTask] = TaskQueue(log.bind(service='TaskQueue'))
+        tasks = doc_store.get_ocr_tasks(target_status, limit=max_count)
         for task in tasks:
             normalized_pdf_path = ensure_relative(Path(task.pdf_path), data_path, "pdf_path")
-            task_queue.put(task.model_copy(update={"pdf_path": str(normalized_pdf_path)}))
-            if max_count is not None and task_queue.qsize() >= max_count:
-                break
+            task_queue.put(OcrTask(doc_id=task.doc_id, pdf_path=str(normalized_pdf_path)))
         log.info(f'pipeline start working in {task_queue.qsize()} tasks, target status: {target_status}')
         result_queue: Queue[ProcessedPdfManifestRecord] = Queue()
 
@@ -190,10 +188,10 @@ def run_pipeline(
                 try:
                     worker_result = None
                     temp_result = extract_text_from_pdf_to_temp(
-                        Path(task.pdf_path), task.pdf_sha, worker_log, storage
+                        Path(task.pdf_path), task.doc_id, worker_log, storage
                     )
                     if temp_result.tmp_file is not None and temp_result.text_sha:
-                        cached_item = pdf_states.get_text_sha(temp_result.text_sha)
+                        cached_item = doc_store.get_ocr_result_by_artefact(temp_result.text_sha)
                         if cached_item is not None:
                             temp_result.tmp_file.unlink(missing_ok=True)
                             worker_log.debug(
@@ -204,9 +202,9 @@ def run_pipeline(
                             )
                             worker_result = ProcessedPdfManifestRecord(
                                 pdf_path=task.pdf_path,
-                                pdf_sha=task.pdf_sha,
+                                pdf_sha=task.doc_id,
                                 status=ProcessedPdfManifestRecord.STATUS_SKIPPED,
-                                text_path=cached_item.text_path,
+                                text_path=cached_item.path,
                                 text_sha=temp_result.text_sha,
                             )
                         else:
@@ -217,7 +215,7 @@ def run_pipeline(
 
                             worker_result = ProcessedPdfManifestRecord(
                                 pdf_path=task.pdf_path,
-                                pdf_sha=task.pdf_sha,
+                                pdf_sha=task.doc_id,
                                 status=ProcessedPdfManifestRecord.STATUS_OK,
                                 text_path=str(shard_relative),
                                 text_sha=temp_result.text_sha,
@@ -229,7 +227,7 @@ def run_pipeline(
                         )
                         worker_result = ProcessedPdfManifestRecord(
                             pdf_path=task.pdf_path,
-                            pdf_sha=task.pdf_sha,
+                            pdf_sha=task.doc_id,
                             status=ProcessedPdfManifestRecord.STATUS_ERROR,
                             text_path=None,
                             text_sha=None,
@@ -241,7 +239,7 @@ def run_pipeline(
                     result_queue.put(
                         ProcessedPdfManifestRecord(
                             pdf_path=task.pdf_path,
-                            pdf_sha=task.pdf_sha,
+                            pdf_sha=task.doc_id,
                             status=ProcessedPdfManifestRecord.STATUS_ERROR,
                             text_path=None,
                             error=str(exc),
@@ -262,20 +260,20 @@ def run_pipeline(
                 manifest.mark(result)
                 if result.status in (ProcessedPdfManifestRecord.STATUS_OK, ProcessedPdfManifestRecord.STATUS_SKIPPED):
                     if result.text_sha and result.text_path:
-                        pdf_states.update_text_status(
-                            result.pdf_sha,
-                            ProcessingStatus.OK,
-                            result.text_sha,
-                            result.text_path,
-                            result.ts,
+                        doc_store.upsert_ocr_result(
+                            doc_id=result.pdf_sha,
+                            status=ProcessingStatus.OK,
+                            artefact_id=result.text_sha,
+                            path=result.text_path,
+                            ts=result.ts,
                         )
                 elif result.status == ProcessedPdfManifestRecord.STATUS_ERROR:
-                    pdf_states.update_text_status(
-                        result.pdf_sha,
-                        ProcessingStatus.ERROR,
-                        result.text_sha,
-                        result.text_path,
-                        result.ts,
+                    doc_store.upsert_ocr_result(
+                        doc_id=result.pdf_sha,
+                        status=ProcessingStatus.ERROR,
+                        artefact_id=result.text_sha,
+                        path=result.text_path,
+                        ts=result.ts,
                     )
             except Empty:
                 if task_queue.unfinished_tasks == 0 and result_queue.empty():
@@ -291,7 +289,7 @@ def run_pipeline(
         log.info("extracting text completed, closing files")
         manifest.flush()
     finally:
-        pdf_states.close()
+        doc_store.close()
         storage.close()
         log.info("files closed")
 
