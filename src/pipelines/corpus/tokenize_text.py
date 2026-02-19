@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 import threading
 from pathlib import Path
@@ -256,16 +257,16 @@ def main(argv: Iterable[str] | None = None) -> None:
         required=False,
         default=None,
         type=Path,
-        help='Root directory for pipeline artifacts (defaults to ./data)',
+        help='Root directory for pipeline artifacts (env: CCLANG_DATA_DIR)',
     )
 
     args = arg_parser.parse_args(argv)
 
     manifest_path = args.manifest_path or Path("manifests/pl_tokenize_text.jsonl")
     database_dsn = args.database_dsn
-    data_path = args.data_path or Path("data")
+    data_path = args.data_path or Path(os.environ.get("CCLANG_DATA_DIR", "data"))
 
-    log_file = Path(args.log_file or Path("data/logs/corpus/tokenize_text.log"))
+    log_file = Path(args.log_file or data_path / "logs/corpus/tokenize_text.log")
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
     setup_logging(

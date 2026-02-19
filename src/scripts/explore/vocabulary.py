@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import sys
 import threading
+import unicodedata
 from collections import Counter
 from pathlib import Path
 from typing import Any, Sequence
@@ -22,16 +24,134 @@ from cclang.io.schemas import DocLemma
 
 logger = logx.get_logger(__name__)
 
+# ---------------------------------------------------------------------------
+# Devanagari normalization & filtering
+# ---------------------------------------------------------------------------
+
+# Unicode ranges for Devanagari
+_DEVANAGARI_BLOCK = r'\u0900-\u097F'
+_DEVANAGARI_EXT = r'\uA8E0-\uA8FF'
+_DEVANAGARI_PATTERN = re.compile(f'^[{_DEVANAGARI_BLOCK}{_DEVANAGARI_EXT}]+$')
+
+# Halant (virama)
+_HALANT = '\u094D'
+
+# Devanagari vowels (independent forms)
+_VOWELS = set('अआइईउऊऋऌएऐओऔॠॡ')
+
+# Pattern: halant followed by an independent vowel (invalid in normal text)
+_HALANT_VOWEL = re.compile(r'्[' + ''.join(_VOWELS) + r']')
+
+# Double halant
+_DOUBLE_HALANT = re.compile(r'्{2,}')
+
+# Ends with halant (often OCR garbage — valid conjuncts don't end in virama
+# except rare cases; we flag but don't hard-reject)
+_TRAILING_HALANT = re.compile(r'्$')
+
+
+def normalize_devanagari(text: str) -> str:
+    """
+    Apply Unicode NFC normalization and strip invisible / zero-width chars.
+
+    This collapses visually identical but byte-different representations that
+    arise from OCR and inconsistent encoding.
+    """
+    text = unicodedata.normalize('NFC', text)
+    # Remove ZWJ / ZWNJ (common OCR artefacts in Devanagari conjuncts)
+    text = text.replace('\u200d', '').replace('\u200c', '')
+    # Remove other invisible characters
+    text = re.sub(r'[\u200b\u00ad\ufeff\u200e\u200f]', '', text)
+    return text
+
+
+def is_valid_devanagari(token: str) -> bool:
+    """
+    Check whether *token* is a plausible Devanagari word.
+
+    Returns False for tokens that contain non-Devanagari characters,
+    start with combining marks, or are unreasonably long.
+    """
+    if not token:
+        return False
+    # Must consist entirely of Devanagari codepoints
+    if not _DEVANAGARI_PATTERN.match(token):
+        return False
+    # Must not start with a combining mark (matra / halant)
+    if unicodedata.category(token[0]) in ('Mn', 'Mc'):
+        return False
+    return True
+
+
+def is_ocr_garbage(token: str) -> bool:
+    """
+    Heuristic detector for common OCR artefacts in Devanagari text.
+
+    A token is flagged if it exhibits patterns that cannot occur in
+    well-formed Marathi:
+      • halant + independent vowel  (e.g. क्अ)
+      • double halant               (e.g. क््क)
+      • syllable repeated ≥3 times  (e.g. वावावा)
+      • excessive halant density     (more than 40 % of chars)
+      • unreasonable length          (> 30 characters)
+    """
+    if len(token) > 30:
+        return True
+
+    if _HALANT_VOWEL.search(token):
+        return True
+
+    if _DOUBLE_HALANT.search(token):
+        return True
+
+    # High halant density → likely broken conjuncts
+    halant_count = token.count(_HALANT)
+    if len(token) > 3 and halant_count / len(token) > 0.35:
+        return True
+
+    # Repeating syllable (2–4 chars) appearing 3+ times in a row
+    for n in range(2, 5):
+        for i in range(len(token) - n * 3 + 1):
+            chunk = token[i:i + n]
+            if chunk * 3 in token:
+                return True
+
+    return False
+
+
+def classify_lemma(lemma: str) -> str:
+    """
+    Classify a lemma into one of:
+      'ok'              – passes all checks
+      'non_devanagari'  – contains non-Devanagari characters
+      'invalid_deva'    – Devanagari but structurally invalid
+      'ocr_garbage'     – looks like an OCR artefact
+    """
+    if not _DEVANAGARI_PATTERN.match(lemma) if lemma else True:
+        return 'non_devanagari'
+    if not is_valid_devanagari(lemma):
+        return 'invalid_deva'
+    if is_ocr_garbage(lemma):
+        return 'ocr_garbage'
+    return 'ok'
+
+
+# ---------------------------------------------------------------------------
+# Statistics collection
+# ---------------------------------------------------------------------------
 
 def collect_stats(
         data_path: Path,
         db_dsn: str | None,
-        top_n: int = 50,
+        lemmatizer_name: str = None,
+        data_preparation: str = None,
+        top_n: int = 5,
         min_df: int | float = 2,
         max_df: float = 0.90,
         head: int | None = None,
         stop_event: threading.Event | None = None,
-        ignore_oov: bool = False
+        ignore_oov: bool = False,
+        enable_normalization: bool = False,
 ) -> dict[str, Any]:
     """
     Collect vocabulary statistics from all lemmatized documents.
@@ -39,6 +159,8 @@ def collect_stats(
     Args:
         data_path: Root data directory containing corpora
         db_dsn: PostgreSQL DSN for querying document state
+        lemmatizer_name: Name of lemmatizer method (default apertium)
+        data_preparation: Preparation method (default none)
         top_n: Number of top lemmas to include
         min_df: Minimum document frequency. If int, absolute count.
                 If float in [0.0, 1.0], proportion of documents.
@@ -47,9 +169,17 @@ def collect_stats(
         head: Limit number of documents to process (for testing)
         stop_event: Optional event to signal early termination
         ignore_oov: If True, ignore OOV tokens
+        enable_normalization: If True, apply Unicode NFC normalization and
+                              Devanagari validity / OCR-garbage filtering.
     Returns:
         Dictionary with vocabulary statistics
     """
+    if lemmatizer_name is None:
+        lemmatizer_name = "apertium-mar-morph"
+
+    if data_preparation is None:
+        data_preparation = 'none'
+
     if stop_event is None:
         stop_event = threading.Event()
 
@@ -78,11 +208,27 @@ def collect_stats(
     total_documents = 0
     lemma_tf: Counter[str] = Counter()  # Term frequency (total occurrences)
     lemma_df: Counter[str] = Counter()  # Document frequency (in how many docs)
+    ner_counter: Counter[str] = Counter()  # Ner tags counter
     unique_lemmas_per_doc: list[int] = []
+
+    # ---- normalization statistics ----
+    norm_stats: dict[str, int] = {
+        'tokens_before_norm': 0,          # total tokens seen
+        'tokens_normalized_changed': 0,   # NFC changed the surface form
+        'unique_collapsed_by_nfc': 0,     # filled after full pass
+        'rejected_non_devanagari': 0,
+        'rejected_invalid_deva': 0,
+        'rejected_ocr_garbage': 0,
+        'tokens_accepted': 0,
+    }
+
+    # When normalization is on we also keep raw→normalized map to measure
+    # how many unique lemmas NFC collapses.
+    raw_lemma_set: set[str] = set()  # unique raw lemmas (before NFC)
 
     try:
         # Query all documents with completed lemma results
-        docs = doc_store.get_completed_lemma_results()
+        docs = doc_store.get_completed_lemma_results(method=lemmatizer_name)
 
         for result in docs:
             if stop_event.is_set():
@@ -122,12 +268,48 @@ def collect_stats(
             for sentence in doc_lemma.sentences:
                 for token in sentence:
                     if not ignore_oov or not token.is_oov:
+                        lemma = token.lemma
+
+                        if token.is_ne:
+                            ner_counter[str(token.ner_result)] += 1
+                            if data_preparation == 'replace_ner':
+                                lemma = '<' + str(token.ner_result).upper() + '>'
+
+                        # ---------- normalization pipeline ----------
+                        if enable_normalization:
+                            norm_stats['tokens_before_norm'] += 1
+                            raw_lemma_set.add(lemma)
+
+                            # Skip NER-replaced tokens from filtering
+                            is_special = lemma.startswith('<') and lemma.endswith('>')
+                            if not is_special:
+                                # 1. NFC normalization
+                                normalized = normalize_devanagari(lemma)
+                                if normalized != lemma:
+                                    norm_stats['tokens_normalized_changed'] += 1
+                                lemma = normalized
+
+                                # 2. Validity & OCR checks
+                                classification = classify_lemma(lemma)
+                                if classification == 'non_devanagari':
+                                    norm_stats['rejected_non_devanagari'] += 1
+                                    continue
+                                elif classification == 'invalid_deva':
+                                    norm_stats['rejected_invalid_deva'] += 1
+                                    continue
+                                elif classification == 'ocr_garbage':
+                                    norm_stats['rejected_ocr_garbage'] += 1
+                                    continue
+
+                            norm_stats['tokens_accepted'] += 1
+                        # ---------- end normalization pipeline ------
+
                         total_tokens += 1
-                        lemma_tf[token.lemma] += 1
-                        doc_lemmas.add(token.lemma)
+                        lemma_tf[lemma] += 1
+                        doc_lemmas.add(lemma)
 
             # Update document frequency for each unique lemma in this doc
-            for lemma in doc_lemmas:
+            for lemma in sorted(doc_lemmas):
                 lemma_df[lemma] += 1
 
             unique_lemmas_per_doc.append(len(doc_lemmas))
@@ -146,6 +328,11 @@ def collect_stats(
     finally:
         storage.close()
         doc_store.close()
+
+    # Measure NFC collapse (unique raw forms → unique normalized forms)
+    if enable_normalization and raw_lemma_set:
+        normalized_set = {normalize_devanagari(l) for l in raw_lemma_set}
+        norm_stats['unique_collapsed_by_nfc'] = len(raw_lemma_set) - len(normalized_set)
 
     # Convert min_df to absolute count if it's a proportion
     if isinstance(min_df, float) and 0.0 <= min_df <= 1.0:
@@ -213,9 +400,9 @@ def collect_stats(
     # Get examples of filtered lemmas
     rare_lemmas_examples = [
         {"lemma": lemma, "tf": lemma_tf[lemma], "df": df}
-        for lemma, df in lemma_df.most_common()[:-11:-1]  # 10 rarest
+        for lemma, df in lemma_df.most_common()[:-31:-1]  # 10 rarest
         if df < min_df_abs
-    ][:5]
+    ][:30]
 
     frequent_lemmas_examples = [
         {"lemma": lemma, "tf": lemma_tf[lemma], "df": df}
@@ -223,15 +410,20 @@ def collect_stats(
         if df > max_df_abs
     ][:5]
 
-    return {
+    result = {
         "total_documents": total_documents,
         "total_tokens": total_tokens,
         # Raw vocabulary stats (before filtering)
         "vocabulary_raw": {
             "total_unique_lemmas": total_lemmas_before,
-            "type_token_ratio": round(type_token_ratio_raw, 6),
+            "type_token_ratio": round(type_token_ratio_raw, 3),
         },
         # Document frequency filter settings
+        "ner_tags_info": {
+                             "total_ner_count": ner_counter.total(),
+                             "ner_ratio": round(ner_counter.total() / total_tokens, 3)
+                             if total_tokens > 0 else 0,
+                         } | {key + '_total_count': count for key, count in ner_counter.items()},
         "df_filter": {
             "min_df": min_df_abs,
             "min_df_ratio": round(min_df_abs / total_documents, 4) if total_documents > 0 else 0,
@@ -262,6 +454,35 @@ def collect_stats(
         "top_lemmas": top_lemmas,
     }
 
+    # ---- append normalization report if enabled ----
+    if enable_normalization:
+        total_rejected = (
+            norm_stats['rejected_non_devanagari']
+            + norm_stats['rejected_invalid_deva']
+            + norm_stats['rejected_ocr_garbage']
+        )
+        result["normalization"] = {
+            "enabled": True,
+            "tokens_before_norm": norm_stats['tokens_before_norm'],
+            "tokens_accepted": norm_stats['tokens_accepted'],
+            "tokens_rejected_total": total_rejected,
+            "tokens_rejected_ratio": (
+                round(total_rejected / norm_stats['tokens_before_norm'], 4)
+                if norm_stats['tokens_before_norm'] > 0 else 0
+            ),
+            "breakdown": {
+                "nfc_changed_tokens": norm_stats['tokens_normalized_changed'],
+                "unique_lemmas_collapsed_by_nfc": norm_stats['unique_collapsed_by_nfc'],
+                "rejected_non_devanagari": norm_stats['rejected_non_devanagari'],
+                "rejected_invalid_devanagari": norm_stats['rejected_invalid_deva'],
+                "rejected_ocr_garbage": norm_stats['rejected_ocr_garbage'],
+            },
+        }
+    else:
+        result["normalization"] = {"enabled": False}
+
+    return result
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry point for vocabulary statistics."""
@@ -281,6 +502,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="PostgreSQL DSN (or env CCLANG_DB_DSN)",
     )
+    parser.add_argument('--method', choices=['apertium', 'stanza'], default='apertium',
+                        help="Method of lemmatization which to consider (default: apertium)")
+    parser.add_argument(
+        '--data-preparation',
+        choices=['none', 'replace_ner'],
+        default='none'
+    )
     parser.add_argument(
         "--output",
         "-o",
@@ -291,8 +519,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--top-n",
         type=int,
-        default=50,
-        help="Number of top lemmas to include (default: 50)",
+        default=5,
+        help="Number of top lemmas to include (default: 5)",
     )
     parser.add_argument(
         "--min-df",
@@ -320,15 +548,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="INFO",
         help="Logging level (default: INFO)",
     )
-
     parser.add_argument(
         "--ignore-oov",
         action="store_true",
         default=False,
     )
+    parser.add_argument(
+        "--normalize",
+        action="store_true",
+        default=False,
+        help="Enable Unicode NFC normalization and Devanagari OCR filtering. "
+             "Rejected tokens are excluded from vocabulary; statistics are "
+             "reported in the 'normalization' section of the output.",
+    )
+
+    lemmatizer_name_map = {
+        "apertium": "apertium-mar-morph",
+        "stanza": "stanza-marathi",
+    }
 
     args = parser.parse_args(argv)
 
+    lemmatizer_name = lemmatizer_name_map[args.method]
     logx.setup_logging(service="script:vocabulary", level=args.log_level)
 
     # Handle graceful shutdown
@@ -362,18 +603,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         stats = collect_stats(
             data_path=args.data_path,
             db_dsn=db_dsn,
+            lemmatizer_name=lemmatizer_name,
+            data_preparation=args.data_preparation,
             top_n=args.top_n,
             min_df=min_df,
             max_df=args.max_df,
             head=args.head,
             stop_event=stop_event,
             ignore_oov=args.ignore_oov,
+            enable_normalization=args.normalize,
         )
     except KeyboardInterrupt:
         logger.warning("Interrupted by user")
         return 130
     except Exception as err:
-        logger.exception("Unexpected error", extra={"exc":str(err)})
+        logger.exception("Unexpected error", extra={"exc": str(err)})
         return 1
 
     # Output results
@@ -391,3 +635,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+    

@@ -2,12 +2,14 @@
 import argparse
 import json
 import logging
+import os
 import signal
 import sys
 import threading
 from pathlib import Path
 from queue import Empty, Queue
 from typing import Iterable, List
+from dotenv import load_dotenv
 from pydantic import HttpUrl
 
 from cclang.common.logx import BoundLogger, get_logger, setup_logging
@@ -221,6 +223,7 @@ def run_pipeline(
 
 
 def main(argv: Iterable[str] | None = None) -> None:
+    load_dotenv()
     arg_parser = argparse.ArgumentParser(
         description='Parse pdf files from links inside json file with schema SourcePDF'
     )
@@ -238,7 +241,8 @@ def main(argv: Iterable[str] | None = None) -> None:
         type=str,
     )
     arg_parser.add_argument('--data-path', default=None, required=False,
-                            help='root directory for pipeline artifacts', type=Path)
+                            help='root directory for pipeline artifacts (env: CCLANG_DATA_DIR)',
+                            type=Path)
     arg_parser.add_argument('--log-level', choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO",
                             required=False, help='level of logging')
     arg_parser.add_argument('--log-format', choices=['json', 'console'], required=False, default='console',
@@ -249,11 +253,11 @@ def main(argv: Iterable[str] | None = None) -> None:
 
     args = arg_parser.parse_args(argv)
 
-    data_path = args.data_path or Path("data")
+    data_path = args.data_path or Path(os.environ.get("CCLANG_DATA_DIR", "data"))
     manifest_path = args.manifest_path or Path("manifests/pl_fetch_pdfs.jsonl")
     database_dsn = args.database_dsn
 
-    log_file = args.log_file or Path("data/logs/corpus/fetch_pdfs.log")
+    log_file = args.log_file or data_path / "logs/corpus/fetch_pdfs.log"
     log_file = Path(log_file)
     log_file.parent.mkdir(parents=True, exist_ok=True)
 

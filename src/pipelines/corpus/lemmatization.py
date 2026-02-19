@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 import logging
+import os
 import signal
 import sys
 import threading
@@ -486,7 +487,7 @@ def main(argv: Iterable[str] | None = None) -> None:
         required=False,
         default=None,
         type=Path,
-        help="Root directory for pipeline artifacts (defaults to ./data)",
+        help="Root directory for pipeline artifacts (env: CCLANG_DATA_DIR)",
     )
     arg_parser.add_argument("--lemmatize-func", choices=["apertium", "stanza"], default="apertium",)
 
@@ -499,9 +500,9 @@ def main(argv: Iterable[str] | None = None) -> None:
     lemmatizer_name = lemmatizer_name_map[args.lemmatize_func]
     manifest_path = args.manifest_path or Path(f"manifests/pl_{args.lemmatize_func}_lemmatization.jsonl")
     database_dsn = args.database_dsn
-    data_path = args.data_path or Path("data")
+    data_path = args.data_path or Path(os.environ.get("CCLANG_DATA_DIR", "data"))
 
-    log_file = Path(args.log_file or Path("data/logs/corpus/lemmatization.log"))
+    log_file = Path(args.log_file or data_path / "logs/corpus/lemmatization.log")
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
     setup_logging(

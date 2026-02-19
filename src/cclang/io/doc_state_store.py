@@ -312,6 +312,7 @@ class DocStateStore:
                         SELECT doc_id, method, artefact_id, status, path, updated_at
                         FROM lemma_results
                         WHERE status = %s AND method = %s
+                        ORDER BY doc_id
                         """,
                         (ProcessingStatus.OK.value, method),
                     )
@@ -321,6 +322,7 @@ class DocStateStore:
                         SELECT doc_id, method, artefact_id, status, path, updated_at
                         FROM lemma_results
                         WHERE status = %s
+                        ORDER BY doc_id
                         """,
                         (ProcessingStatus.OK.value,),
                     )
