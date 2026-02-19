@@ -8,18 +8,21 @@ from pydantic import BaseModel, Field, HttpUrl
 
 SCHEMA_VERSION = "0.1.0"
 
+
 # ---------- DataBase --------
 
 class FetchedItem(BaseModel):
     url: HttpUrl
     sha256: str
     local_path: str
-    ts: str = Field(default_factory= lambda: datetime.now().isoformat() + 'Z')
+    ts: str = Field(default_factory=lambda: datetime.now().isoformat() + 'Z')
+
 
 class ProcessingStatus(str, Enum):
     OK = "ok"
     ERROR = "error"
     NOT_PROCESSED = "pending"
+
 
 # ---------- Normalized DB task/result models --------
 
@@ -55,12 +58,38 @@ class OcrResult(BaseModel):
     updated_at: Optional[str] = None
 
 
+class VocabParams(BaseModel):
+    min_df: Optional[int] = None
+    max_df: Optional[int] = None
+    min_tf: Optional[int] = None
+    replace_ner: Optional[bool] = False
+    normalize: Optional[bool] = False
+    ignore_oov: Optional[bool] = False
+
+
+class VocabStats(BaseModel):
+    total_lemmas: int
+    total_documents: int
+
+
+class VocabInfo(BaseModel):
+    run_id: int
+    lemma_path: str
+    artefact_id: Optional[str] = None
+    status: ProcessingStatus = Field(default=ProcessingStatus.OK)
+    path: Optional[str] = None
+    vocab_params: Optional[VocabParams] = None
+    vocab_stats: Optional[VocabStats] = None
+    updated_at: Optional[str] = None
+
+
 # ---------- Manifest --------
 
 class FetchSatus(str, Enum):
     OK = "ok"
     ERROR = "error"
     SKIPPED = "skipped"
+
 
 class FetchManifestRecord(BaseModel):
     schema_version: str = Field(default=SCHEMA_VERSION)
@@ -71,7 +100,7 @@ class FetchManifestRecord(BaseModel):
     size: Optional[int] = None
     local_path: Optional[str] = None
     error: Optional[str] = None
-    ts: str = Field(default_factory= lambda: datetime.now().isoformat() + 'Z')
+    ts: str = Field(default_factory=lambda: datetime.now().isoformat() + 'Z')
 
     STATUS_OK: ClassVar[FetchSatus] = FetchSatus.OK
     STATUS_ERROR: ClassVar[FetchSatus] = FetchSatus.ERROR
@@ -82,10 +111,12 @@ class FetchManifestRecord(BaseModel):
         # Fallback to URL when sha is unknown (errors)
         return self.sha or str(self.url)
 
+
 class ProcessedPdfStatus(str, Enum):
     OK = "ok"
     ERROR = "error"
     SKIPPED = "skipped"
+
 
 class ProcessedPdfManifestRecord(BaseModel):
     schema_version: str = Field(default=SCHEMA_VERSION)
@@ -96,7 +127,7 @@ class ProcessedPdfManifestRecord(BaseModel):
     text_path: Optional[str] = None
     text_sha: Optional[str] = None
     error: Optional[str] = None
-    ts: str = Field(default_factory= lambda: datetime.now().isoformat() + 'Z')
+    ts: str = Field(default_factory=lambda: datetime.now().isoformat() + 'Z')
 
     STATUS_OK: ClassVar[ProcessedPdfStatus] = ProcessedPdfStatus.OK
     STATUS_ERROR: ClassVar[ProcessedPdfStatus] = ProcessedPdfStatus.ERROR
@@ -105,6 +136,7 @@ class ProcessedPdfManifestRecord(BaseModel):
     @property
     def id(self):
         return self.pdf_sha
+
 
 class TokenizeManifestRecord(BaseModel):
     schema_version: str = Field(default=SCHEMA_VERSION)
@@ -117,7 +149,7 @@ class TokenizeManifestRecord(BaseModel):
     tokenize_sha: Optional[str]
     error: Optional[str] = None
 
-    ts: str = Field(default_factory= lambda: datetime.now().isoformat() + 'Z')
+    ts: str = Field(default_factory=lambda: datetime.now().isoformat() + 'Z')
 
     STATUS_OK: ClassVar[ProcessedPdfStatus] = ProcessedPdfStatus.OK
     STATUS_ERROR: ClassVar[ProcessedPdfStatus] = ProcessedPdfStatus.ERROR
@@ -126,7 +158,6 @@ class TokenizeManifestRecord(BaseModel):
     @property
     def id(self):
         return self.pdf_sha
-
 
 
 class LemmatizeManifestRecord(BaseModel):
@@ -140,7 +171,7 @@ class LemmatizeManifestRecord(BaseModel):
     lemma_sha: Optional[str]
     error: Optional[str] = None
 
-    ts: str = Field(default_factory= lambda: datetime.now().isoformat() + 'Z')
+    ts: str = Field(default_factory=lambda: datetime.now().isoformat() + 'Z')
 
     STATUS_OK: ClassVar[ProcessedPdfStatus] = ProcessedPdfStatus.OK
     STATUS_ERROR: ClassVar[ProcessedPdfStatus] = ProcessedPdfStatus.ERROR
@@ -151,12 +182,12 @@ class LemmatizeManifestRecord(BaseModel):
         return self.pdf_sha
 
 
-
 class UploadStatus(str, Enum):
     QUEUED = "queued"
     STARTED = "started"
     SUCCEDED = "succeeded"
     FAILED = "failed"
+
 
 class UploadManifestRecord(BaseModel):
     schema_version: str = Field(default=SCHEMA_VERSION)
@@ -165,11 +196,12 @@ class UploadManifestRecord(BaseModel):
     cloud_key: str
     status: UploadStatus
 
-    ts: str = Field(default_factory= lambda: datetime.now().isoformat() + 'Z')
+    ts: str = Field(default_factory=lambda: datetime.now().isoformat() + 'Z')
 
     @property
     def id(self):
         return str(self.local_path) + ';' + str(self.cloud_key)
+
 
 # ---------- Corpus ----------
 
@@ -186,6 +218,7 @@ class DocTok(BaseModel):
     lang: str
     sentences: List[List[str]]  # tokenized sentences
     meta: Optional[Dict] = None
+
 
 class LemmaToken(BaseModel):
     token: str

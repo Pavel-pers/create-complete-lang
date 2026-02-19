@@ -35,6 +35,23 @@ def _migrate_pdf_state(conn: psycopg.Connection) -> None:
         if not row or not row[0]:
             return
 
+        # Already migrated in a previous run (pdf_state_old exists)
+        cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_name = 'pdf_state_old'
+            )
+            """
+        )
+        row = cur.fetchone()
+        if row and row[0]:
+            # Both tables exist — previous migration copied data but
+            # pdf_state was recreated.  Drop the stale original.
+            cur.execute("DROP TABLE pdf_state")
+            conn.commit()
+            return
+
         # Copy documents
         cur.execute(
             """
@@ -176,6 +193,25 @@ def ensure_schema(conn: psycopg.Connection) -> None:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_lemma_results_artefact_id "
             "ON lemma_results (artefact_id);"
+        )
+
+        cur.execute(
+            """CREATE TABLE IF NOT EXISTS vocab_builds
+               (
+                   run_id      SERIAL PRIMARY KEY,
+                   lemma_path  TEXT NOT NULL,
+                   artefact_id TEXT,
+                   status      TEXT NOT NULL DEFAULT 'ok',
+                   path        TEXT,
+                   params      JSONB,
+                   stats       JSONB,
+                   updated_at  TIMESTAMPTZ
+               );
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_vocab_builds_lemma_path "
+            "ON vocab_builds (lemma_path);"
         )
 
     conn.commit()
