@@ -384,7 +384,7 @@ class DocStateStore:
             conn.commit()
             return run_id
 
-    #* index_builds / corpus_fragments
+    #* corpus_builds / corpus_fragments
 
     def get_vocab_build(self, run_id: int) -> VocabInfo:
         """Return a VocabInfo for the given vocab_builds.run_id, or raise ValueError."""
@@ -423,7 +423,7 @@ class DocStateStore:
         status: ProcessingStatus,
         stats: dict[str, int] | None = None,
     ) -> int:
-        """Insert an index_builds record and return run_id."""
+        """Insert an corpus_builds record and return run_id."""
         import json
 
         with self._lock:
@@ -431,7 +431,7 @@ class DocStateStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO index_builds (vocab_id, fragment_size, stats, status, updated_at)
+                    INSERT INTO corpus_builds (vocab_id, fragment_size, stats, status, updated_at)
                     VALUES (%s, %s, %s::jsonb, %s, NOW())
                     RETURNING run_id
                     """,
@@ -454,7 +454,7 @@ class DocStateStore:
         status: ProcessingStatus,
         stats: dict[str, int] | None = None,
     ) -> None:
-        """Update status and stats for an index_builds record."""
+        """Update status and stats for an corpus_builds record."""
         import json
 
         with self._lock:
@@ -462,7 +462,7 @@ class DocStateStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    UPDATE index_builds
+                    UPDATE corpus_builds
                     SET status = %s, stats = %s::jsonb, updated_at = NOW()
                     WHERE run_id = %s
                     """,
