@@ -210,6 +210,44 @@ def ensure_schema(conn: psycopg.Connection) -> None:
             """
         )
 
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS index_builds
+            (
+                run_id            SERIAL PRIMARY KEY,
+                vocab_id      INT  NOT NULL REFERENCES vocab_builds(run_id),
+                fragment_size INT  NOT NULL,
+                stats         JSONB,
+                status        TEXT NOT NULL DEFAULT 'ok',
+                updated_at    TIMESTAMPTZ
+            )
+            """
+        )
+
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_index_builds_vocab_id "
+            "ON index_builds (vocab_id);"
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS corpus_fragments
+            (
+                build_id      INT  NOT NULL REFERENCES index_builds (run_id),
+                source_doc_id TEXT NOT NULL,
+                artefact_id   TEXT,
+                status        TEXT NOT NULL DEFAULT 'ok',
+                path          TEXT,
+                updated_at    TIMESTAMPTZ
+            )
+            """
+        )
+
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_corpus_fragments_build_id "
+            "ON corpus_fragments (build_id);"
+        )
+
     conn.commit()
 
     # Migrate legacy data if pdf_state still exists

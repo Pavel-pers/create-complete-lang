@@ -22,6 +22,7 @@ class ProcessingStatus(str, Enum):
     OK = "ok"
     ERROR = "error"
     NOT_PROCESSED = "pending"
+    RUNNING = "running"
 
 
 # ---------- Normalized DB task/result models --------
@@ -256,17 +257,15 @@ class SourcePDF(BaseModel):
     added_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+
 # ---------- Vocabulary / Matrix ----------
-
-class TokenInfo(BaseModel):
-    freq: int
-    df: Optional[int] = None
-    extra: Optional[Dict] = None
-
-
-class Vocab(BaseModel):
+class FragmentProcessed(BaseModel):
     schema_version: str = Field(default=SCHEMA_VERSION)
-    tokens: Dict[str, TokenInfo]
+    id: str
+    source_doc_id: str
+    position: int
+    token_ids: list[int]
+    vocab_id: int
 
 
 # ---------- Vectors (LSA/SVD) ----------

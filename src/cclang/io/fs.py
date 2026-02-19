@@ -112,16 +112,16 @@ class FileManager:
     def _get_lock(self, path: Path) -> threading.Lock:
         """Get or create a lock for the given path with automatic cleanup."""
         with self._locks_lock:
-            # Get or create lock
+            # Periodic cleanup (before creating new locks so we never
+            # remove the lock we are about to return)
+            self._operation_count += 1
+            if self._operation_count >= 1000:
+                self._operation_count = 0
+                if len(self._locks) > self._max_locks:
+                    self._cleanup_locks()
+
             if path not in self._locks:
                 self._locks[path] = threading.Lock()
-
-                # Clenup after 1000 operations
-                self._operation_count += 1
-                if self._operation_count >= 1000:
-                    self._operation_count = 0
-                    if len(self._locks) > self._max_locks:
-                        self._cleanup_locks()
 
             return self._locks[path]
 

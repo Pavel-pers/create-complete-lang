@@ -56,6 +56,7 @@ cclang-lemmatize-text = "pipelines.corpus.lemmatization:main"
 upload-local-to-s3 = "scripts.upload_local_to_s3:main"
 load-from-s3 = "scripts.load_local_from_s3:main"
 cclang-build-vocab = "pipelines.corpus.build_vocab:main"
+cclang-index-corpus = "pipelines.corpus.index_corpus:main"
 cclang-explore-vocabulary = "scripts.explore.vocabulary:main"
 cclang-explore-lemma-stats = "scripts.explore.lemma_stats:main"
 
