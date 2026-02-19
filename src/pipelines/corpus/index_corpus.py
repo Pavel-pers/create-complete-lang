@@ -97,32 +97,28 @@ def run_pipeline(
     build_id: int | None = None
 
     try:
-        # 1. Load vocab build info
         vocab_info = doc_store.get_vocab_build(vocab_id)
         log.info(
             "vocab build loaded",
             extra={"vocab_id": vocab_id, "lemma_method": vocab_info.lemma_method},
         )
 
-        # 2. Load vocab .tsv
         if not vocab_info.path:
             log.error("vocab build has no path", extra={"vocab_id": vocab_id})
             return 1
         lemma_to_idx = load_vocab_tsv(storage, Path(vocab_info.path))
         log.info("vocabulary loaded", extra={"vocab_size": len(lemma_to_idx)})
 
-        # 3. Extract preprocessing flags from vocab params
         vp = vocab_info.vocab_params
         do_replace_ner = bool(vp and vp.replace_ner)
         do_normalize = bool(vp and vp.normalize)
         do_ignore_oov = bool(vp and vp.ignore_oov)
 
-        # 4. Get completed lemma documents
+        # Get completed lemma documents
         lemma_method = vocab_info.lemma_method
         docs = doc_store.get_completed_lemma_results(method=lemma_method)
         log.info("lemma documents found", extra={"count": len(docs), "method": lemma_method})
 
-        # 5. Reserve build_id
         build_id = doc_store.insert_index_build(
             vocab_id=vocab_id,
             fragment_size=fragment_size,
@@ -140,7 +136,7 @@ def run_pipeline(
 
         output_base_rel = Path(output_base_path)
 
-        # 6. Process each document
+        # Process each document
         for result in docs:
             if stop_event.is_set():
                 log.warning("stop requested, aborting")
@@ -169,7 +165,7 @@ def run_pipeline(
 
             doc_id = result.doc_id
 
-            # 6b. Process sentences → list[list[int]]
+            # Process sentences
             processed_sentences: list[list[int]] = []
             for sentence in doc_lemma.sentences:
                 token_ids: list[int] = []
@@ -183,7 +179,7 @@ def run_pipeline(
                     token_ids.append(idx)
                 processed_sentences.append(token_ids)
 
-            # 6d. Chunk into fragments of fragment_size sentences
+            # Chunk into fragments of fragment_size sentences
             n_sentences = len(processed_sentences)
             chunks: list[list[list[int]]] = [
                 processed_sentences[i : i + fragment_size]
@@ -243,7 +239,6 @@ def run_pipeline(
                     extra={"processed": total_documents, "fragments": total_fragments},
                 )
 
-        # 7. Stats
         stats = {
             "total_documents": total_documents,
             "total_fragments": total_fragments,
@@ -252,12 +247,12 @@ def run_pipeline(
             "empty_fragments_skipped": empty_fragments_skipped,
         }
 
-        # 8. Batch insert fragment rows
+        # Batch insert fragment rows
         if fragment_rows:
             doc_store.batch_insert_corpus_fragments(fragment_rows)
             log.info("corpus fragments inserted", extra={"count": len(fragment_rows)})
 
-        # 9. Update build status
+        # Update build status
         doc_store.update_index_build(build_id, status=ProcessingStatus.OK, stats=stats)
         log.info("index build completed", extra={"build_id": build_id, **stats})
 
