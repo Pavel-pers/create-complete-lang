@@ -198,20 +198,16 @@ def ensure_schema(conn: psycopg.Connection) -> None:
         cur.execute(
             """CREATE TABLE IF NOT EXISTS vocab_builds
                (
-                   run_id      SERIAL PRIMARY KEY,
-                   lemma_path  TEXT NOT NULL,
-                   artefact_id TEXT,
-                   status      TEXT NOT NULL DEFAULT 'ok',
-                   path        TEXT,
-                   params      JSONB,
-                   stats       JSONB,
-                   updated_at  TIMESTAMPTZ
+                   run_id        SERIAL PRIMARY KEY,
+                   lemma_method  TEXT NOT NULL,
+                   artefact_id   TEXT,
+                   status        TEXT NOT NULL DEFAULT 'ok',
+                   path          TEXT,
+                   params        JSONB,
+                   stats         JSONB,
+                   updated_at    TIMESTAMPTZ
                );
             """
-        )
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_vocab_builds_lemma_path "
-            "ON vocab_builds (lemma_path);"
         )
 
     conn.commit()

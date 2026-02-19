@@ -13,6 +13,8 @@ from cclang.io.schemas import (
     OcrTask,
     ProcessingStatus,
     TokenizeTask,
+    VocabParams,
+    VocabStats,
 )
 
 
@@ -343,6 +345,43 @@ class DocStateStore:
                         )
                     )
                 return results
+
+    #* vocab_builds
+
+    def insert_vocab_build(
+        self,
+        lemma_method: str,
+        artefact_id: Optional[str],
+        status: ProcessingStatus,
+        path: Optional[str],
+        params: Optional[VocabParams] = None,
+        stats: Optional[VocabStats] = None,
+    ) -> int:
+        """Insert a vocab build record, return run_id."""
+        with self._lock:
+            conn = self._check_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO vocab_builds
+                        (lemma_method, artefact_id, status, path, params, stats, updated_at)
+                    VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, NOW())
+                    RETURNING run_id
+                    """,
+                    (
+                        lemma_method,
+                        artefact_id,
+                        status.value,
+                        path,
+                        params.model_dump_json() if params else None,
+                        stats.model_dump_json() if stats else None,
+                    ),
+                )
+                row = cur.fetchone()
+                assert row is not None
+                run_id = row[0]
+            conn.commit()
+            return run_id
 
     # lifecycle
 

@@ -74,7 +74,7 @@ class VocabStats(BaseModel):
 
 class VocabInfo(BaseModel):
     run_id: int
-    lemma_path: str
+    lemma_method: str
     artefact_id: Optional[str] = None
     status: ProcessingStatus = Field(default=ProcessingStatus.OK)
     path: Optional[str] = None
@@ -107,7 +107,7 @@ class FetchManifestRecord(BaseModel):
     STATUS_SKIPPED: ClassVar[FetchSatus] = FetchSatus.SKIPPED
 
     @property
-    def id(self):
+    def id(self) -> str:
         # Fallback to URL when sha is unknown (errors)
         return self.sha or str(self.url)
 
@@ -134,7 +134,7 @@ class ProcessedPdfManifestRecord(BaseModel):
     STATUS_SKIPPED: ClassVar[ProcessedPdfStatus] = ProcessedPdfStatus.SKIPPED
 
     @property
-    def id(self):
+    def id(self) -> str:
         return self.pdf_sha
 
 
@@ -156,7 +156,7 @@ class TokenizeManifestRecord(BaseModel):
     STATUS_SKIPPED: ClassVar[ProcessedPdfStatus] = ProcessedPdfStatus.SKIPPED
 
     @property
-    def id(self):
+    def id(self) -> str:
         return self.pdf_sha
 
 
@@ -178,7 +178,7 @@ class LemmatizeManifestRecord(BaseModel):
     STATUS_SKIPPED: ClassVar[ProcessedPdfStatus] = ProcessedPdfStatus.SKIPPED
 
     @property
-    def id(self):
+    def id(self) -> str:
         return self.pdf_sha
 
 
@@ -199,7 +199,7 @@ class UploadManifestRecord(BaseModel):
     ts: str = Field(default_factory=lambda: datetime.now().isoformat() + 'Z')
 
     @property
-    def id(self):
+    def id(self) -> str:
         return str(self.local_path) + ';' + str(self.cloud_key)
 
 
