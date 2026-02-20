@@ -47,38 +47,35 @@ def iter_fragments(
 
 
 def log_entropy_weighting(tf_matrix: sparse.csr_matrix) -> sparse.csr_matrix:
-    """Log-entropy weighting: local=log(1+tf), global=1-entropy."""
+    """Log-entropy weighting."""
     local = tf_matrix.copy()
     local.data = np.log1p(local.data)
 
     n_docs = tf_matrix.shape[0]
-    tf_sum = np.array(tf_matrix.sum(axis=0)).flatten()
+    csc = tf_matrix.tocsc()
+    col_sums = np.array(csc.sum(axis=0)).flatten()
 
-    global_weights = np.ones(tf_matrix.shape[1])
-    for token_col_i in range(tf_matrix.shape[1]):
-        col = np.array(tf_matrix.getcol(token_col_i).todense()).flatten()
-        nnz = col[col > 0]
-        if len(nnz) > 0:
-            token_p = nnz / tf_sum[token_col_i]
-            entropy = -np.sum(token_p * np.log(token_p)) / np.log(n_docs)
-            global_weights[token_col_i] = 1.0 - entropy
+    col_indices = np.repeat(np.arange(csc.shape[1]), np.diff(csc.indptr))
+    p = csc.data / col_sums[col_indices]
 
-    return cast(sparse.csr_matrix, local.multiply(global_weights))
+    p_log_p = p * np.log(p)
+    entropy = np.zeros(csc.shape[1])
+    np.add.at(entropy, col_indices, -p_log_p)
 
+    global_weights = 1.0 - entropy / np.log(n_docs)
+
+    return local.multiply(global_weights)
 
 def tfidf_weighting(tf_matrix: sparse.csr_matrix) -> sparse.csr_matrix:
-    """Standard TF-IDF: log(1 + tf) * log(N / df)."""
-    n_docs = tf_matrix.shape[0]
-
-    # Local: log(1 + tf)
     local = tf_matrix.copy()
     local.data = np.log1p(local.data)
 
-    # Global: log(N / df)
-    df = np.array((tf_matrix > 0).sum(axis=0)).flatten()
+    n_docs = tf_matrix.shape[0]
+    csc = tf_matrix.tocsc()
+    df = np.diff(csc.indptr)
     idf = np.log(n_docs / df)
 
-    return cast(sparse.csr_matrix, local.multiply(idf))
+    return local.multiply(idf)
 
 
 WEIGHTING_METHODS_MAPPING = {
