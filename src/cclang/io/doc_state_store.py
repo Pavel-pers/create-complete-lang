@@ -8,11 +8,13 @@ from typing import List, Optional
 import psycopg
 
 from cclang.io.schemas import (
+    CorpusInfo,
     LemmaResult,
     LemmatizeTask,
     OcrResult,
     OcrTask,
     ProcessingStatus,
+    TdmInfo,
     TokenizeTask,
     VocabInfo,
     VocabParams,
@@ -421,6 +423,72 @@ class DocStateStore:
                     vocab_stats=VocabStats.model_validate(row[6]) if row[6] else None,
                     updated_at=(
                         row[7].isoformat() if isinstance(row[7], datetime) else row[7]
+                    ),
+                )
+
+    def get_corpus_build(self, run_id: int) -> CorpusInfo:
+        """Return a CorpusInfo for the given corpus_builds.run_id, or raise ValueError."""
+        with self._lock:
+            conn = self._check_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT run_id,
+                           vocab_id,
+                           fragment_size,
+                           status,
+                           stats,
+                           updated_at
+                    FROM corpus_builds
+                    WHERE run_id = %s
+                    """,
+                    (run_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise ValueError(f"corpus_builds run_id={run_id} not found")
+                return CorpusInfo(
+                    run_id=row[0],
+                    vocab_id=row[1],
+                    fragment_size=row[2],
+                    status=ProcessingStatus(row[3]),
+                    stats=row[4],
+                    updated_at=(
+                        row[5].isoformat() if isinstance(row[5], datetime) else row[5]
+                    ),
+                )
+
+    def get_tdm_build(self, run_id: int) -> TdmInfo:
+        """Return a TdmInfo for the given tdm_builds.run_id, or raise ValueError."""
+        with self._lock:
+            conn = self._check_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT run_id,
+                           corpus_id,
+                           weighting,
+                           status,
+                           path,
+                           stats,
+                           updated_at
+                    FROM tdm_builds
+                    WHERE run_id = %s
+                    """,
+                    (run_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise ValueError(f"tdm_builds run_id={run_id} not found")
+                return TdmInfo(
+                    run_id=row[0],
+                    corpus_id=row[1],
+                    weighting=row[2],
+                    status=ProcessingStatus(row[3]),
+                    path=row[4],
+                    stats=row[5],
+                    updated_at=(
+                        row[6].isoformat() if isinstance(row[6], datetime) else row[6]
                     ),
                 )
 

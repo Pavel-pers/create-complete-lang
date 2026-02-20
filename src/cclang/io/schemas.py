@@ -84,6 +84,25 @@ class VocabInfo(BaseModel):
     updated_at: Optional[str] = None
 
 
+class CorpusInfo(BaseModel):
+    run_id: int
+    vocab_id: int
+    fragment_size: int
+    status: ProcessingStatus = Field(default=ProcessingStatus.OK)
+    stats: Optional[Dict[str, Any]] = None
+    updated_at: Optional[str] = None
+
+
+class TdmInfo(BaseModel):
+    run_id: int
+    corpus_id: int
+    weighting: Optional[str] = None
+    status: ProcessingStatus = Field(default=ProcessingStatus.OK)
+    path: Optional[str] = None
+    stats: Optional[Dict[str, Any]] = None
+    updated_at: Optional[str] = None
+
+
 # ---------- Manifest --------
 
 class FetchSatus(str, Enum):
