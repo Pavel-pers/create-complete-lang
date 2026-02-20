@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime
+from pathlib import Path
 from typing import List, Optional
 
 import psycopg
@@ -35,7 +36,7 @@ class DocStateStore:
             raise RuntimeError("invalid access to closed connection")
         return self._conn
 
-    #* documents
+    # * documents
 
     def sync_documents_from_fetch_items(self) -> None:
         with self._lock:
@@ -59,12 +60,12 @@ class DocStateStore:
                 cur.execute("SELECT path FROM documents")
                 return [row[0] for row in cur.fetchall()]
 
-    #* ocr_results
+    # * ocr_results
 
     def get_ocr_tasks(
-        self,
-        target_status: Optional[ProcessingStatus] = ProcessingStatus.NOT_PROCESSED,
-        limit: Optional[int] = None,
+            self,
+            target_status: Optional[ProcessingStatus] = ProcessingStatus.NOT_PROCESSED,
+            limit: Optional[int] = None,
     ) -> List[OcrTask]:
         with self._lock:
             conn = self._check_conn()
@@ -72,19 +73,19 @@ class DocStateStore:
                 if target_status is None or target_status == ProcessingStatus.NOT_PROCESSED:
                     # pending = no row in ocr_results
                     query = """
-                        SELECT d.doc_id, d.path
-                        FROM documents d
-                        LEFT JOIN ocr_results o ON d.doc_id = o.doc_id
-                        WHERE o.doc_id IS NULL
-                    """
+                            SELECT d.doc_id, d.path
+                            FROM documents d
+                                     LEFT JOIN ocr_results o ON d.doc_id = o.doc_id
+                            WHERE o.doc_id IS NULL \
+                            """
                     params: list = []
                 else:
                     query = """
-                        SELECT d.doc_id, d.path
-                        FROM documents d
-                        JOIN ocr_results o ON d.doc_id = o.doc_id
-                        WHERE o.status = %s
-                    """
+                            SELECT d.doc_id, d.path
+                            FROM documents d
+                                     JOIN ocr_results o ON d.doc_id = o.doc_id
+                            WHERE o.status = %s \
+                            """
                     params = [target_status.value]
 
                 if limit is not None:
@@ -118,12 +119,12 @@ class DocStateStore:
                 )
 
     def upsert_ocr_result(
-        self,
-        doc_id: str,
-        status: ProcessingStatus,
-        artefact_id: Optional[str],
-        path: Optional[str],
-        ts: Optional[str],
+            self,
+            doc_id: str,
+            status: ProcessingStatus,
+            artefact_id: Optional[str],
+            path: Optional[str],
+            ts: Optional[str],
     ) -> None:
         with self._lock:
             conn = self._check_conn()
@@ -133,10 +134,10 @@ class DocStateStore:
                     INSERT INTO ocr_results (doc_id, status, artefact_id, path, updated_at)
                     VALUES (%s, %s, %s, %s, %s)
                     ON CONFLICT (doc_id) DO UPDATE
-                    SET status     = EXCLUDED.status,
-                        artefact_id = EXCLUDED.artefact_id,
-                        path       = EXCLUDED.path,
-                        updated_at = EXCLUDED.updated_at
+                        SET status      = EXCLUDED.status,
+                            artefact_id = EXCLUDED.artefact_id,
+                            path        = EXCLUDED.path,
+                            updated_at  = EXCLUDED.updated_at
                     """,
                     (doc_id, status.value, artefact_id, path, ts),
                 )
@@ -152,33 +153,33 @@ class DocStateStore:
                 )
                 return [row[0] for row in cur.fetchall()]
 
-    #* tokenize_results
+    # * tokenize_results
 
     def get_tokenize_tasks(
-        self,
-        target_status: Optional[ProcessingStatus] = ProcessingStatus.NOT_PROCESSED,
-        limit: Optional[int] = None,
+            self,
+            target_status: Optional[ProcessingStatus] = ProcessingStatus.NOT_PROCESSED,
+            limit: Optional[int] = None,
     ) -> List[TokenizeTask]:
         with self._lock:
             conn = self._check_conn()
             with conn.cursor() as cur:
                 if target_status is None or target_status == ProcessingStatus.NOT_PROCESSED:
                     query = """
-                        SELECT d.doc_id, o.path AS text_path
-                        FROM documents d
-                        JOIN ocr_results o ON d.doc_id = o.doc_id AND o.status = 'ok'
-                        LEFT JOIN tokenize_results t ON d.doc_id = t.doc_id
-                        WHERE t.doc_id IS NULL
-                    """
+                            SELECT d.doc_id, o.path AS text_path
+                            FROM documents d
+                                     JOIN ocr_results o ON d.doc_id = o.doc_id AND o.status = 'ok'
+                                     LEFT JOIN tokenize_results t ON d.doc_id = t.doc_id
+                            WHERE t.doc_id IS NULL \
+                            """
                     params: list = []
                 else:
                     query = """
-                        SELECT d.doc_id, o.path AS text_path
-                        FROM documents d
-                        JOIN ocr_results o ON d.doc_id = o.doc_id AND o.status = 'ok'
-                        JOIN tokenize_results t ON d.doc_id = t.doc_id
-                        WHERE t.status = %s
-                    """
+                            SELECT d.doc_id, o.path AS text_path
+                            FROM documents d
+                                     JOIN ocr_results o ON d.doc_id = o.doc_id AND o.status = 'ok'
+                                     JOIN tokenize_results t ON d.doc_id = t.doc_id
+                            WHERE t.status = %s \
+                            """
                     params = [target_status.value]
 
                 if limit is not None:
@@ -189,12 +190,12 @@ class DocStateStore:
                 return [TokenizeTask(doc_id=row[0], text_path=row[1]) for row in cur.fetchall()]
 
     def upsert_tokenize_result(
-        self,
-        doc_id: str,
-        status: ProcessingStatus,
-        artefact_id: Optional[str],
-        path: Optional[str],
-        ts: Optional[str],
+            self,
+            doc_id: str,
+            status: ProcessingStatus,
+            artefact_id: Optional[str],
+            path: Optional[str],
+            ts: Optional[str],
     ) -> None:
         with self._lock:
             conn = self._check_conn()
@@ -204,10 +205,10 @@ class DocStateStore:
                     INSERT INTO tokenize_results (doc_id, status, artefact_id, path, updated_at)
                     VALUES (%s, %s, %s, %s, %s)
                     ON CONFLICT (doc_id) DO UPDATE
-                    SET status     = EXCLUDED.status,
-                        artefact_id = EXCLUDED.artefact_id,
-                        path       = EXCLUDED.path,
-                        updated_at = EXCLUDED.updated_at
+                        SET status      = EXCLUDED.status,
+                            artefact_id = EXCLUDED.artefact_id,
+                            path        = EXCLUDED.path,
+                            updated_at  = EXCLUDED.updated_at
                     """,
                     (doc_id, status.value, artefact_id, path, ts),
                 )
@@ -223,13 +224,13 @@ class DocStateStore:
                 )
                 return [row[0] for row in cur.fetchall()]
 
-    #* lemma_results
+    # * lemma_results
 
     def get_lemma_tasks(
-        self,
-        target_status: Optional[ProcessingStatus] = ProcessingStatus.NOT_PROCESSED,
-        method: str = "apertium-mar-morph",
-        limit: Optional[int] = None,
+            self,
+            target_status: Optional[ProcessingStatus] = ProcessingStatus.NOT_PROCESSED,
+            method: str = "apertium-mar-morph",
+            limit: Optional[int] = None,
     ) -> List[LemmatizeTask]:
         with self._lock:
             conn = self._check_conn()
@@ -237,34 +238,34 @@ class DocStateStore:
                 if target_status is None:
                     # all — every tokenized doc regardless of lemma status
                     query = """
-                        SELECT d.doc_id, t.path AS tokenize_path
-                        FROM documents d
-                        JOIN ocr_results o ON d.doc_id = o.doc_id AND o.status = 'ok'
-                        JOIN tokenize_results t ON d.doc_id = t.doc_id AND t.status = 'ok'
-                    """
+                            SELECT d.doc_id, t.path AS tokenize_path
+                            FROM documents d
+                                     JOIN ocr_results o ON d.doc_id = o.doc_id AND o.status = 'ok'
+                                     JOIN tokenize_results t ON d.doc_id = t.doc_id AND t.status = 'ok' \
+                            """
                     params: list = []
                 elif target_status == ProcessingStatus.NOT_PROCESSED:
                     # pending — docs with no lemma result for this method
                     query = """
-                        SELECT d.doc_id, t.path AS tokenize_path
-                        FROM documents d
-                        JOIN ocr_results o ON d.doc_id = o.doc_id AND o.status = 'ok'
-                        JOIN tokenize_results t ON d.doc_id = t.doc_id AND t.status = 'ok'
-                        LEFT JOIN lemma_results l
-                            ON d.doc_id = l.doc_id AND l.method = %s
-                        WHERE l.doc_id IS NULL
-                    """
+                            SELECT d.doc_id, t.path AS tokenize_path
+                            FROM documents d
+                                     JOIN ocr_results o ON d.doc_id = o.doc_id AND o.status = 'ok'
+                                     JOIN tokenize_results t ON d.doc_id = t.doc_id AND t.status = 'ok'
+                                     LEFT JOIN lemma_results l
+                                               ON d.doc_id = l.doc_id AND l.method = %s
+                            WHERE l.doc_id IS NULL \
+                            """
                     params = [method]
                 else:
                     query = """
-                        SELECT d.doc_id, t.path AS tokenize_path
-                        FROM documents d
-                        JOIN ocr_results o ON d.doc_id = o.doc_id AND o.status = 'ok'
-                        JOIN tokenize_results t ON d.doc_id = t.doc_id AND t.status = 'ok'
-                        JOIN lemma_results l
-                            ON d.doc_id = l.doc_id AND l.method = %s
-                        WHERE l.status = %s
-                    """
+                            SELECT d.doc_id, t.path AS tokenize_path
+                            FROM documents d
+                                     JOIN ocr_results o ON d.doc_id = o.doc_id AND o.status = 'ok'
+                                     JOIN tokenize_results t ON d.doc_id = t.doc_id AND t.status = 'ok'
+                                     JOIN lemma_results l
+                                          ON d.doc_id = l.doc_id AND l.method = %s
+                            WHERE l.status = %s \
+                            """
                     params = [method, target_status.value]
 
                 if limit is not None:
@@ -278,13 +279,13 @@ class DocStateStore:
                 ]
 
     def upsert_lemma_result(
-        self,
-        doc_id: str,
-        method: str,
-        status: ProcessingStatus,
-        artefact_id: Optional[str],
-        path: Optional[str],
-        ts: Optional[str],
+            self,
+            doc_id: str,
+            method: str,
+            status: ProcessingStatus,
+            artefact_id: Optional[str],
+            path: Optional[str],
+            ts: Optional[str],
     ) -> None:
         with self._lock:
             conn = self._check_conn()
@@ -294,17 +295,17 @@ class DocStateStore:
                     INSERT INTO lemma_results (doc_id, method, status, artefact_id, path, updated_at)
                     VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (doc_id, method) DO UPDATE
-                    SET status     = EXCLUDED.status,
-                        artefact_id = EXCLUDED.artefact_id,
-                        path       = EXCLUDED.path,
-                        updated_at = EXCLUDED.updated_at
+                        SET status      = EXCLUDED.status,
+                            artefact_id = EXCLUDED.artefact_id,
+                            path        = EXCLUDED.path,
+                            updated_at  = EXCLUDED.updated_at
                     """,
                     (doc_id, method, status.value, artefact_id, path, ts),
                 )
             conn.commit()
 
     def get_completed_lemma_results(
-        self, method: Optional[str] = None
+            self, method: Optional[str] = None
     ) -> List[LemmaResult]:
         with self._lock:
             conn = self._check_conn()
@@ -314,7 +315,8 @@ class DocStateStore:
                         """
                         SELECT doc_id, method, artefact_id, status, path, updated_at
                         FROM lemma_results
-                        WHERE status = %s AND method = %s
+                        WHERE status = %s
+                          AND method = %s
                         ORDER BY doc_id
                         """,
                         (ProcessingStatus.OK.value, method),
@@ -347,16 +349,16 @@ class DocStateStore:
                     )
                 return results
 
-    #* vocab_builds
+    # * vocab_builds
 
     def insert_vocab_build(
-        self,
-        lemma_method: str,
-        artefact_id: Optional[str],
-        status: ProcessingStatus,
-        path: Optional[str],
-        params: Optional[VocabParams] = None,
-        stats: Optional[VocabStats] = None,
+            self,
+            lemma_method: str,
+            artefact_id: Optional[str],
+            status: ProcessingStatus,
+            path: Optional[str],
+            params: Optional[VocabParams] = None,
+            stats: Optional[VocabStats] = None,
     ) -> int:
         """Insert a vocab build record, return run_id."""
         with self._lock:
@@ -384,7 +386,7 @@ class DocStateStore:
             conn.commit()
             return run_id
 
-    #* corpus_builds / corpus_fragments
+    # * corpus_builds / corpus_fragments
 
     def get_vocab_build(self, run_id: int) -> VocabInfo:
         """Return a VocabInfo for the given vocab_builds.run_id, or raise ValueError."""
@@ -393,8 +395,14 @@ class DocStateStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT run_id, lemma_method, artefact_id, status, path,
-                           params, stats, updated_at
+                    SELECT run_id,
+                           lemma_method,
+                           artefact_id,
+                           status,
+                           path,
+                           params,
+                           stats,
+                           updated_at
                     FROM vocab_builds
                     WHERE run_id = %s
                     """,
@@ -416,12 +424,28 @@ class DocStateStore:
                     ),
                 )
 
-    def insert_index_build(
-        self,
-        vocab_id: int,
-        fragment_size: int,
-        status: ProcessingStatus,
-        stats: dict[str, int] | None = None,
+    def get_fragments_by_build_id(self, build_id: int) -> list[str]:
+        """
+            returns fragments path by build_id
+        """
+        with self._lock:
+            conn = self._check_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT path 
+                    FROM corpus_fragments 
+                    WHERE status = 'ok' AND build_id = %s
+                    """, (build_id, ), )
+                rows = cur.fetchall()
+                return [row[0] for row in rows]
+
+    def insert_corpus_build(
+            self,
+            vocab_id: int,
+            fragment_size: int,
+            status: ProcessingStatus,
+            stats: dict[str, int] | None = None,
     ) -> int:
         """Insert an corpus_builds record and return run_id."""
         import json
@@ -448,11 +472,11 @@ class DocStateStore:
             conn.commit()
             return run_id
 
-    def update_index_build(
-        self,
-        build_id: int,
-        status: ProcessingStatus,
-        stats: dict[str, int] | None = None,
+    def update_corpus_build(
+            self,
+            build_id: int,
+            status: ProcessingStatus,
+            stats: dict[str, int] | None = None,
     ) -> None:
         """Update status and stats for an corpus_builds record."""
         import json
@@ -463,7 +487,9 @@ class DocStateStore:
                 cur.execute(
                     """
                     UPDATE corpus_builds
-                    SET status = %s, stats = %s::jsonb, updated_at = NOW()
+                    SET status     = %s,
+                        stats      = %s::jsonb,
+                        updated_at = NOW()
                     WHERE run_id = %s
                     """,
                     (
@@ -474,9 +500,75 @@ class DocStateStore:
                 )
             conn.commit()
 
+    def insert_tdm_build(
+            self,
+            corpus_id: int,
+            weighting: str,
+            status: ProcessingStatus,
+            path: str | None = None,
+            stats: dict[str, int] | None = None,
+    ) -> int:
+        """Insert a tdm_builds record, return run_id."""
+        import json
+
+        with self._lock:
+            conn = self._check_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO tdm_builds
+                        (corpus_id, weighting, status, path, stats, updated_at)
+                    VALUES (%s, %s, %s, %s, %s::jsonb, NOW())
+                    RETURNING run_id
+                    """,
+                    (
+                        corpus_id,
+                        weighting,
+                        status.value,
+                        path,
+                        json.dumps(stats) if stats else None,
+                    ),
+                )
+                row = cur.fetchone()
+                assert row is not None
+                run_id: int = row[0]
+            conn.commit()
+            return run_id
+
+    def update_tdm_build(
+            self,
+            build_id: int,
+            status: ProcessingStatus,
+            path: str | None = None,
+            stats: dict[str, int] | None = None,
+    ) -> None:
+        """Update status, path, and stats for a tdm_builds record."""
+        import json
+
+        with self._lock:
+            conn = self._check_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE tdm_builds
+                    SET status     = %s,
+                        path       = %s,
+                        stats      = %s::jsonb,
+                        updated_at = NOW()
+                    WHERE run_id = %s
+                    """,
+                    (
+                        status.value,
+                        path,
+                        json.dumps(stats) if stats else None,
+                        build_id,
+                    ),
+                )
+            conn.commit()
+
     def batch_insert_corpus_fragments(
-        self,
-        rows: list[tuple[int, str, str | None, str, str | None]],
+            self,
+            rows: list[tuple[int, str, str | None, str, str | None]],
     ) -> None:
         """Batch INSERT rows into corpus_fragments via executemany.
 

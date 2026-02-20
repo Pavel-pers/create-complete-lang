@@ -248,6 +248,27 @@ def ensure_schema(conn: psycopg.Connection) -> None:
             "ON corpus_fragments (build_id);"
         )
 
+        cur.execute(
+            """
+                CREATE TABLE IF NOT EXISTS tdm_builds
+                (
+                    run_id        SERIAL PRIMARY KEY,
+                    corpus_id   INT NOT NULL REFERENCES corpus_builds(run_id),
+                    weighting TEXT, -- 'log-entropy'/'tf-idf'
+                    stats JSONB,
+                    path TEXT,
+                    status TEXT,
+                    updated_at    TIMESTAMPTZ
+                )
+            """
+        )
+
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tdm_corpus_id "
+            "ON tdm_builds (corpus_id);"
+        )
+
+
     conn.commit()
 
     # Migrate legacy data if pdf_state still exists

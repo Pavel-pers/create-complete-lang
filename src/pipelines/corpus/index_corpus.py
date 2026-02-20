@@ -119,7 +119,7 @@ def run_pipeline(
         docs = doc_store.get_completed_lemma_results(method=lemma_method)
         log.info("lemma documents found", extra={"count": len(docs), "method": lemma_method})
 
-        build_id = doc_store.insert_index_build(
+        build_id = doc_store.insert_corpus_build(
             vocab_id=vocab_id,
             fragment_size=fragment_size,
             status=ProcessingStatus.RUNNING,
@@ -253,13 +253,13 @@ def run_pipeline(
             log.info("corpus fragments inserted", extra={"count": len(fragment_rows)})
 
         # Update build status
-        doc_store.update_index_build(build_id, status=ProcessingStatus.OK, stats=stats)
+        doc_store.update_corpus_build(build_id, status=ProcessingStatus.OK, stats=stats)
         log.info("index build completed", extra={"build_id": build_id, **stats})
 
     except Exception:
         if build_id is not None:
             try:
-                doc_store.update_index_build(build_id, status=ProcessingStatus.ERROR)
+                doc_store.update_corpus_build(build_id, status=ProcessingStatus.ERROR)
             except Exception:
                 pass
         raise
