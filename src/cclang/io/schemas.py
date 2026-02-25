@@ -102,6 +102,52 @@ class TdmInfo(BaseModel):
     stats: Optional[Dict[str, Any]] = None
     updated_at: Optional[str] = None
 
+class SvdInputInfo(BaseModel):
+    """Snapshot if input data"""
+    tdm_build_id: int
+    matrix_shape: List[int] = Field(..., min_length=2, max_length=2)
+    matrix_nnz: int
+    matrix_density: float
+
+
+class SvdParams(BaseModel):
+    """Hyperparams for SVD."""
+    k: int
+    n_iter: int = 5
+    oversampling: int = 10
+    random_state: Optional[int] = None
+
+
+class SvdSpectrum(BaseModel):
+    """Spectral characteristics for SVD."""
+    singular_values: List[float]
+    explained_variance_ratio: List[float]
+    cumulative_energy: List[float]
+    energy_captured: float
+    effective_rank_90: int
+    effective_rank_95: int
+
+
+class SvdSigmaSummary(BaseModel):
+    max: float
+    min: float
+    median: float
+    mean: float
+
+
+class SvdRuntime(BaseModel):
+    wall_time_seconds: float
+
+
+class SvdBuildStats(BaseModel):
+    """Full statistic of SVD-build, for json dumping"""
+    schema_version: str = Field(default=SCHEMA_VERSION)
+    input: SvdInputInfo
+    params: SvdParams
+    spectrum: SvdSpectrum
+    sigma_summary: SvdSigmaSummary
+    runtime: SvdRuntime
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
 # ---------- Manifest --------
 

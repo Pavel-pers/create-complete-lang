@@ -268,6 +268,26 @@ def ensure_schema(conn: psycopg.Connection) -> None:
             "ON tdm_builds (corpus_id);"
         )
 
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS svd_builds
+            (
+                run_id     SERIAL PRIMARY KEY,
+                tdm_id     INT NOT NULL REFERENCES tdm_builds(run_id),
+                k          INT NOT NULL,
+                params     JSONB,
+                stats      JSONB,
+                path       TEXT,
+                status     TEXT NOT NULL DEFAULT 'running',
+                updated_at TIMESTAMPTZ
+            )
+            """
+        )
+
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_svd_builds_tdm_id "
+            "ON svd_builds (tdm_id);"
+        )
 
     conn.commit()
 
