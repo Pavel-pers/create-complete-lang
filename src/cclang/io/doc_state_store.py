@@ -14,6 +14,7 @@ from cclang.io.schemas import (
     OcrResult,
     OcrTask,
     ProcessingStatus,
+    SvdBuildInfo,
     TdmInfo,
     TokenizeTask,
     VocabInfo,
@@ -689,6 +690,114 @@ class DocStateStore:
                 cur.execute(
                     """
                     UPDATE svd_builds
+                    SET status     = %s,
+                        path       = %s,
+                        stats      = %s::jsonb,
+                        updated_at = NOW()
+                    WHERE run_id = %s
+                    """,
+                    (
+                        status.value,
+                        path,
+                        json.dumps(stats) if stats else None,
+                        build_id,
+                    ),
+                )
+            conn.commit()
+
+    def get_svd_build(self, run_id: int) -> SvdBuildInfo:
+        """Return a SvdBuildInfo for the given svd_builds.run_id, or raise ValueError."""
+        with self._lock:
+            conn = self._check_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT run_id,
+                           tdm_id,
+                           k,
+                           params,
+                           stats,
+                           path,
+                           status,
+                           updated_at
+                    FROM svd_builds
+                    WHERE run_id = %s
+                    """,
+                    (run_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise ValueError(f"svd_builds run_id={run_id} not found")
+                return SvdBuildInfo(
+                    run_id=row[0],
+                    tdm_id=row[1],
+                    k=row[2],
+                    params=row[3],
+                    stats=row[4],
+                    path=row[5],
+                    status=ProcessingStatus(row[6]),
+                    updated_at=(
+                        row[7].isoformat() if isinstance(row[7], datetime) else row[7]
+                    ),
+                )
+
+    # * embedding_builds
+
+    def insert_embedding_build(
+            self,
+            svd_id: int,
+            sigma_power: float,
+            method: str,
+            status: ProcessingStatus,
+            reshape_k: int | None = None,
+            path: str | None = None,
+            stats: dict[str, Any] | None = None,
+    ) -> int:
+        """Insert an embedding_builds record and return run_id."""
+        import json
+
+        with self._lock:
+            conn = self._check_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO embedding_builds
+                        (svd_id, sigma_power, reshape_k, method, stats, path, status, updated_at)
+                    VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, NOW())
+                    RETURNING run_id
+                    """,
+                    (
+                        svd_id,
+                        sigma_power,
+                        reshape_k,
+                        method,
+                        json.dumps(stats) if stats else None,
+                        path,
+                        status.value,
+                    ),
+                )
+                row = cur.fetchone()
+                assert row is not None
+                run_id: int = row[0]
+            conn.commit()
+            return run_id
+
+    def update_embedding_build(
+            self,
+            build_id: int,
+            status: ProcessingStatus,
+            path: str | None = None,
+            stats: dict[str, Any] | None = None,
+    ) -> None:
+        """Update status, path, and stats for an embedding_builds record."""
+        import json
+
+        with self._lock:
+            conn = self._check_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE embedding_builds
                     SET status     = %s,
                         path       = %s,
                         stats      = %s::jsonb,

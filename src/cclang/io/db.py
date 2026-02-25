@@ -289,6 +289,28 @@ def ensure_schema(conn: psycopg.Connection) -> None:
             "ON svd_builds (tdm_id);"
         )
 
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS embedding_builds
+            (
+                run_id      SERIAL PRIMARY KEY,
+                svd_id      INT NOT NULL REFERENCES svd_builds(run_id),
+                sigma_power DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+                reshape_k   INT,
+                method      TEXT NOT NULL DEFAULT 'svd',
+                stats       JSONB,
+                path        TEXT,
+                status      TEXT NOT NULL DEFAULT 'running',
+                updated_at  TIMESTAMPTZ
+            )
+            """
+        )
+
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_embedding_builds_svd_id "
+            "ON embedding_builds (svd_id);"
+        )
+
     conn.commit()
 
     # Migrate legacy data if pdf_state still exists

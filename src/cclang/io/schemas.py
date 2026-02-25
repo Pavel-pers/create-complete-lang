@@ -102,6 +102,17 @@ class TdmInfo(BaseModel):
     stats: Optional[Dict[str, Any]] = None
     updated_at: Optional[str] = None
 
+class SvdBuildInfo(BaseModel):
+    run_id: int
+    tdm_id: int
+    k: int
+    params: Optional[Dict[str, Any]] = None
+    stats: Optional[Dict[str, Any]] = None
+    path: Optional[str] = None
+    status: ProcessingStatus = Field(default=ProcessingStatus.OK)
+    updated_at: Optional[str] = None
+
+
 class SvdInputInfo(BaseModel):
     """Snapshot if input data"""
     tdm_build_id: int
