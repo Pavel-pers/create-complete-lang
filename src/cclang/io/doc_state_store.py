@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import psycopg
 
@@ -551,6 +551,76 @@ class DocStateStore:
                 cur.execute(
                     """
                     UPDATE tdm_builds
+                    SET status     = %s,
+                        path       = %s,
+                        stats      = %s::jsonb,
+                        updated_at = NOW()
+                    WHERE run_id = %s
+                    """,
+                    (
+                        status.value,
+                        path,
+                        json.dumps(stats) if stats else None,
+                        build_id,
+                    ),
+                )
+            conn.commit()
+
+    # * svd_builds
+
+    def insert_svd_build(
+            self,
+            tdm_id: int,
+            k: int,
+            status: ProcessingStatus,
+            params: dict[str, Any] | None = None,
+            path: str | None = None,
+            stats: dict[str, Any] | None = None,
+    ) -> int:
+        """Insert an svd_builds record and return run_id."""
+        import json
+
+        with self._lock:
+            conn = self._check_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO svd_builds
+                        (tdm_id, k, params, stats, path, status, updated_at)
+                    VALUES (%s, %s, %s::jsonb, %s::jsonb, %s, %s, NOW())
+                    RETURNING run_id
+                    """,
+                    (
+                        tdm_id,
+                        k,
+                        json.dumps(params) if params else None,
+                        json.dumps(stats) if stats else None,
+                        path,
+                        status.value,
+                    ),
+                )
+                row = cur.fetchone()
+                assert row is not None
+                run_id: int = row[0]
+            conn.commit()
+            return run_id
+
+    def update_svd_build(
+            self,
+            build_id: int,
+            status: ProcessingStatus,
+            path: str | None = None,
+            stats: dict[str, Any] | None = None,
+    ) -> None:
+        """Update status, path, and stats for an svd_builds record."""
+        import json
+
+        with self._lock:
+            conn = self._check_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE svd_builds
                     SET status     = %s,
                         path       = %s,
                         stats      = %s::jsonb,

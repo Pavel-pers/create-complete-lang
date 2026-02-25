@@ -58,6 +58,7 @@ load-from-s3 = "scripts.load_local_from_s3:main"
 cclang-build-vocab = "pipelines.corpus.build_vocab:main"
 cclang-index-corpus = "pipelines.corpus.index_corpus:main"
 cclang-build-tdm = "pipelines.embeddings.build_tdm:main"
+cclang-build-svd = "pipelines.embeddings.build_svd:main"
 cclang-explore-vocabulary = "scripts.explore.vocabulary:main"
 cclang-explore-lemma-stats = "scripts.explore.lemma_stats:main"
 
