@@ -62,6 +62,7 @@ cclang-build-svd = "pipelines.embeddings.build_svd:main"
 cclang-build-embeddings = "pipelines.embeddings.build_embeddings:main"
 cclang-explore-vocabulary = "scripts.explore.vocabulary:main"
 cclang-explore-lemma-stats = "scripts.explore.lemma_stats:main"
+cclang-explore-embeddings-geometry = "scripts.explore.embeddings.explore_geometry:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

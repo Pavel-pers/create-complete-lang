@@ -102,11 +102,24 @@ class TdmInfo(BaseModel):
     stats: Optional[Dict[str, Any]] = None
     updated_at: Optional[str] = None
 
+
 class SvdBuildInfo(BaseModel):
     run_id: int
     tdm_id: int
     k: int
     params: Optional[Dict[str, Any]] = None
+    stats: Optional[Dict[str, Any]] = None
+    path: Optional[str] = None
+    status: ProcessingStatus = Field(default=ProcessingStatus.OK)
+    updated_at: Optional[str] = None
+
+
+class EmbeddingsBuildInfo(BaseModel):
+    run_id: int
+    svd_id: int
+    sigma_power: float
+    reshape_k: int
+    method: str
     stats: Optional[Dict[str, Any]] = None
     path: Optional[str] = None
     status: ProcessingStatus = Field(default=ProcessingStatus.OK)
@@ -159,6 +172,7 @@ class SvdBuildStats(BaseModel):
     sigma_summary: SvdSigmaSummary
     runtime: SvdRuntime
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
 
 # ---------- Manifest --------
 
@@ -331,7 +345,6 @@ class SourcePDF(BaseModel):
     lang: str = Field(default="mr", description="ISO 639-1 language code")
     source: Optional[str] = Field(default=None, description="Origin site or collection")
     added_at: datetime = Field(default_factory=datetime.utcnow)
-
 
 
 # ---------- Vocabulary / Matrix ----------

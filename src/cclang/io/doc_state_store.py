@@ -19,7 +19,7 @@ from cclang.io.schemas import (
     TokenizeTask,
     VocabInfo,
     VocabParams,
-    VocabStats,
+    VocabStats, EmbeddingsBuildInfo,
 )
 
 
@@ -812,6 +812,44 @@ class DocStateStore:
                     ),
                 )
             conn.commit()
+
+    def get_embeddings_build(self, run_id: int) -> EmbeddingsBuildInfo:
+        with self._lock:
+            conn = self._check_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT run_id,
+                            svd_id,
+                            sigma_power,
+                            reshape_k,
+                            method,
+                            stats,
+                            path,
+                            status,
+                            updated_at
+                    FROM embedding_builds
+                    WHERE run_id = %s
+                    """,
+                    (run_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise ValueError(f"embedding_builds run_id={run_id} not found")
+                return EmbeddingsBuildInfo(
+                    run_id=row[0],
+                    svd_id=row[1],
+                    sigma_power=row[2],
+                    reshape_k=row[3],
+                    method=row[4],
+                    stats=row[5],
+                    path=row[6],
+                    status=ProcessingStatus(row[6]),
+                    updated_at=(
+                        row[7].isoformat() if isinstance(row[7], datetime) else row[7]
+                    )
+                )
+
 
     def batch_insert_corpus_fragments(
             self,
