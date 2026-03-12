@@ -298,11 +298,20 @@ def ensure_schema(conn: psycopg.Connection) -> None:
                 sigma_power DOUBLE PRECISION NOT NULL DEFAULT 1.0,
                 reshape_k   INT,
                 method      TEXT NOT NULL DEFAULT 'svd',
+                params      JSONB,
                 stats       JSONB,
                 path        TEXT,
                 status      TEXT NOT NULL DEFAULT 'running',
                 updated_at  TIMESTAMPTZ
             )
+            """
+        )
+
+        # Migration: add params column if table already exists without it
+        cur.execute(
+            """
+            ALTER TABLE embedding_builds
+            ADD COLUMN IF NOT EXISTS params JSONB
             """
         )
 

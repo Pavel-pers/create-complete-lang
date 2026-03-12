@@ -751,6 +751,7 @@ class DocStateStore:
             status: ProcessingStatus,
             reshape_k: int | None = None,
             path: str | None = None,
+            params: dict[str, Any] | None = None,
             stats: dict[str, Any] | None = None,
     ) -> int:
         """Insert an embedding_builds record and return run_id."""
@@ -762,8 +763,8 @@ class DocStateStore:
                 cur.execute(
                     """
                     INSERT INTO embedding_builds
-                        (svd_id, sigma_power, reshape_k, method, stats, path, status, updated_at)
-                    VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, NOW())
+                        (svd_id, sigma_power, reshape_k, method, params, stats, path, status, updated_at)
+                    VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, NOW())
                     RETURNING run_id
                     """,
                     (
@@ -771,6 +772,7 @@ class DocStateStore:
                         sigma_power,
                         reshape_k,
                         method,
+                        json.dumps(params) if params else None,
                         json.dumps(stats) if stats else None,
                         path,
                         status.value,
@@ -787,9 +789,13 @@ class DocStateStore:
             build_id: int,
             status: ProcessingStatus,
             path: str | None = None,
+            params: dict[str, Any] | None = None,
             stats: dict[str, Any] | None = None,
     ) -> None:
-        """Update status, path, and stats for an embedding_builds record."""
+        """Update status, path, params, and stats for an embedding_builds record.
+
+        ``params`` uses COALESCE — passing None preserves the existing value.
+        """
         import json
 
         with self._lock:
@@ -801,6 +807,7 @@ class DocStateStore:
                     SET status     = %s,
                         path       = %s,
                         stats      = %s::jsonb,
+                        params     = COALESCE(%s::jsonb, params),
                         updated_at = NOW()
                     WHERE run_id = %s
                     """,
@@ -808,6 +815,7 @@ class DocStateStore:
                         status.value,
                         path,
                         json.dumps(stats) if stats else None,
+                        json.dumps(params) if params else None,
                         build_id,
                     ),
                 )
@@ -820,14 +828,15 @@ class DocStateStore:
                 cur.execute(
                     """
                     SELECT run_id,
-                            svd_id,
-                            sigma_power,
-                            reshape_k,
-                            method,
-                            stats,
-                            path,
-                            status,
-                            updated_at
+                           svd_id,
+                           sigma_power,
+                           reshape_k,
+                           method,
+                           params,
+                           stats,
+                           path,
+                           status,
+                           updated_at
                     FROM embedding_builds
                     WHERE run_id = %s
                     """,
@@ -842,12 +851,13 @@ class DocStateStore:
                     sigma_power=row[2],
                     reshape_k=row[3],
                     method=row[4],
-                    stats=row[5],
-                    path=row[6],
-                    status=ProcessingStatus(row[6]),
+                    params=row[5],
+                    stats=row[6],
+                    path=row[7],
+                    status=ProcessingStatus(row[8]),
                     updated_at=(
-                        row[7].isoformat() if isinstance(row[7], datetime) else row[7]
-                    )
+                        row[9].isoformat() if isinstance(row[9], datetime) else row[9]
+                    ),
                 )
 
 

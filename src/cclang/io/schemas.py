@@ -120,6 +120,7 @@ class EmbeddingsBuildInfo(BaseModel):
     sigma_power: float
     reshape_k: int
     method: str
+    params: Optional[Dict[str, Any]] = None
     stats: Optional[Dict[str, Any]] = None
     path: Optional[str] = None
     status: ProcessingStatus = Field(default=ProcessingStatus.OK)
