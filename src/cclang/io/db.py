@@ -15,6 +15,9 @@ def get_conn(database_dsn: str | None) -> psycopg.Connection:
 
     # Add a short connect timeout so a bad network/host does not hang the pipeline startup.
     conn = psycopg.connect(dsn, connect_timeout=5)
+    # Migrations MUST run before ensure_schema to avoid name conflicts
+    _migrate_pdf_state(conn)
+    _migrate_artifact_tables(conn)
     ensure_schema(conn)
     return conn
 
@@ -210,11 +213,13 @@ def ensure_schema(conn: psycopg.Connection) -> None:
             """
         )
 
+        # ---------- fragment pipeline (renamed from corpus_builds) ----------
+
         cur.execute(
             """
-            CREATE TABLE IF NOT EXISTS corpus_builds
+            CREATE TABLE IF NOT EXISTS fragment_builds
             (
-                run_id            SERIAL PRIMARY KEY,
+                run_id        SERIAL PRIMARY KEY,
                 vocab_id      INT  NOT NULL REFERENCES vocab_builds(run_id),
                 fragment_size INT  NOT NULL,
                 stats         JSONB,
@@ -225,15 +230,15 @@ def ensure_schema(conn: psycopg.Connection) -> None:
         )
 
         cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_corpus_builds_vocab_id "
-            "ON corpus_builds (vocab_id);"
+            "CREATE INDEX IF NOT EXISTS idx_fragment_builds_vocab_id "
+            "ON fragment_builds (vocab_id);"
         )
 
         cur.execute(
             """
-            CREATE TABLE IF NOT EXISTS corpus_fragments
+            CREATE TABLE IF NOT EXISTS fragment_results
             (
-                build_id      INT  NOT NULL REFERENCES corpus_builds (run_id),
+                build_id      INT  NOT NULL REFERENCES fragment_builds (run_id),
                 source_doc_id TEXT NOT NULL,
                 artefact_id   TEXT,
                 status        TEXT NOT NULL DEFAULT 'ok',
@@ -244,22 +249,22 @@ def ensure_schema(conn: psycopg.Connection) -> None:
         )
 
         cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_corpus_fragments_build_id "
-            "ON corpus_fragments (build_id);"
+            "CREATE INDEX IF NOT EXISTS idx_fragment_results_build_id "
+            "ON fragment_results (build_id);"
         )
 
         cur.execute(
             """
-                CREATE TABLE IF NOT EXISTS tdm_builds
-                (
-                    run_id        SERIAL PRIMARY KEY,
-                    corpus_id   INT NOT NULL REFERENCES corpus_builds(run_id),
-                    weighting TEXT, -- 'log-entropy'/'tf-idf'
-                    stats JSONB,
-                    path TEXT,
-                    status TEXT,
-                    updated_at    TIMESTAMPTZ
-                )
+            CREATE TABLE IF NOT EXISTS tdm_builds
+            (
+                run_id      SERIAL PRIMARY KEY,
+                corpus_id   INT NOT NULL REFERENCES fragment_builds(run_id),
+                weighting   TEXT,
+                stats       JSONB,
+                path        TEXT,
+                status      TEXT,
+                updated_at  TIMESTAMPTZ
+            )
             """
         )
 
@@ -291,7 +296,7 @@ def ensure_schema(conn: psycopg.Connection) -> None:
 
         cur.execute(
             """
-            CREATE TABLE IF NOT EXISTS embedding_builds
+            CREATE TABLE IF NOT EXISTS embedding_builds_old
             (
                 run_id      SERIAL PRIMARY KEY,
                 svd_id      INT NOT NULL REFERENCES svd_builds(run_id),
@@ -307,14 +312,140 @@ def ensure_schema(conn: psycopg.Connection) -> None:
         )
 
         cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_embedding_builds_svd_id "
-            "ON embedding_builds (svd_id);"
+            "CREATE INDEX IF NOT EXISTS idx_embedding_builds_old_svd_id "
+            "ON embedding_builds_old (svd_id);"
+        )
+
+        # ---------- unified artifact tables ----------
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS corpus_builds
+            (
+                run_id     SERIAL PRIMARY KEY,
+                path       TEXT NOT NULL,
+                version    TEXT NOT NULL,
+                status     TEXT NOT NULL DEFAULT 'running',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS embedding_builds
+            (
+                run_id     SERIAL PRIMARY KEY,
+                path       TEXT NOT NULL,
+                version    TEXT NOT NULL,
+                status     TEXT NOT NULL DEFAULT 'running',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cluster_builds
+            (
+                run_id     SERIAL PRIMARY KEY,
+                path       TEXT NOT NULL,
+                version    TEXT NOT NULL,
+                status     TEXT NOT NULL DEFAULT 'running',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            )
+            """
         )
 
     conn.commit()
 
-    # Migrate legacy data if pdf_state still exists
-    _migrate_pdf_state(conn)
+
+def _migrate_artifact_tables(conn: psycopg.Connection) -> None:
+    """Rename old ``corpus_builds`` → ``fragment_builds``,
+    ``corpus_fragments`` → ``fragment_results``,
+    ``embedding_builds`` → ``embedding_builds_old``.
+    Then the new unified ``corpus_builds``, ``embedding_builds``,
+    ``cluster_builds`` are created by ``ensure_schema()``."""
+    with conn.cursor() as cur:
+        # Check if migration already done (fragment_builds exists)
+        cur.execute("SELECT to_regclass('public.fragment_builds')")
+        if cur.fetchone()[0] is not None:
+            return
+
+        # Check if old corpus_builds exists (nothing to migrate on fresh DB)
+        cur.execute("SELECT to_regclass('public.corpus_builds')")
+        row = cur.fetchone()
+        old_corpus_exists = row[0] is not None
+
+        if old_corpus_exists:
+            # Check if it's the OLD schema (has vocab_id column) or new one
+            cur.execute(
+                """
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'corpus_builds' AND column_name = 'vocab_id'
+                """
+            )
+            is_old_schema = cur.fetchone() is not None
+
+            if not is_old_schema:
+                # Already the new unified schema, nothing to migrate
+                return
+
+            # Rename old tables
+            cur.execute("ALTER TABLE corpus_builds RENAME TO fragment_builds")
+            cur.execute("ALTER TABLE corpus_fragments RENAME TO fragment_results")
+            cur.execute(
+                "ALTER INDEX IF EXISTS idx_corpus_builds_vocab_id "
+                "RENAME TO idx_fragment_builds_vocab_id"
+            )
+            cur.execute(
+                "ALTER INDEX IF EXISTS idx_corpus_fragments_build_id "
+                "RENAME TO idx_fragment_results_build_id"
+            )
+
+        # Check if old embedding_builds exists (has svd_id column)
+        cur.execute("SELECT to_regclass('public.embedding_builds')")
+        row = cur.fetchone()
+        old_emb_exists = row[0] is not None
+
+        if old_emb_exists:
+            cur.execute(
+                """
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'embedding_builds' AND column_name = 'svd_id'
+                """
+            )
+            is_old_emb_schema = cur.fetchone() is not None
+
+            if is_old_emb_schema:
+                cur.execute(
+                    "ALTER TABLE embedding_builds RENAME TO embedding_builds_old"
+                )
+                cur.execute(
+                    "ALTER INDEX IF EXISTS idx_embedding_builds_svd_id "
+                    "RENAME TO idx_embedding_builds_old_svd_id"
+                )
+
+        # Create the new unified tables (idempotent)
+        for table in ("corpus_builds", "embedding_builds", "cluster_builds"):
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {table}
+                (
+                    run_id     SERIAL PRIMARY KEY,
+                    path       TEXT NOT NULL,
+                    version    TEXT NOT NULL,
+                    status     TEXT NOT NULL DEFAULT 'running',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+                """
+            )
+
+    conn.commit()
 
 
 """

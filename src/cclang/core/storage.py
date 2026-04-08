@@ -1,4 +1,6 @@
 import dataclasses
+import gzip
+import shutil
 from os import unlink
 from pathlib import Path
 from typing import Optional, Type, TypeVar, IO, Dict
@@ -203,6 +205,29 @@ class StorageManager:
                     self._is_temporary = True
                     return data_path
 
+            # * Try .gz variant (locally, then cloud)
+            gz_path = Path(str(path) + '.gz')
+
+            if self._sm._exists_local(gz_path):
+                local_gz = self._fm.resolve_local(gz_path)
+                return self._decompress_gz(local_gz, path)
+
+            if self._sm._exists_cloud(gz_path):
+                if self._fm.local_cfg.cache_files:
+                    gz_local = self._fm.resolve_local(gz_path)
+                    gz_local.parent.mkdir(parents=True, exist_ok=True)
+                    self._s3.download(gz_path, gz_local, blocking=True)
+                    return self._decompress_gz(gz_local, path)
+                else:
+                    gz_tmp = self._fm.create_temp_file('.s3_cached.gz')
+                    self._s3.download(gz_path, gz_tmp, blocking=True)
+                    decompressed = self._fm.create_temp_file('.ungz')
+                    with gzip.open(gz_tmp, 'rb') as f_in, open(decompressed, 'wb') as f_out:
+                        shutil.copyfileobj(f_in, f_out)
+                    gz_tmp.unlink(missing_ok=True)
+                    self._is_temporary = True
+                    return decompressed
+
             # * File don't exist neither localy nor cloud
             if self._is_write_mode:
                 data_path = self._fm.resolve_local(path)
@@ -216,6 +241,22 @@ class StorageManager:
                 return data_path
 
             raise FileNotFoundError(f"File not found neither localy nor in cloud: '{path}'")
+
+        def _decompress_gz(self, gz_local_path: Path, original_path: Path) -> Path:
+            """Decompress a .gz file. Cache the result if caching is enabled."""
+            if self._fm.local_cfg.cache_files:
+                decompressed = self._fm.resolve_local(original_path)
+                decompressed.parent.mkdir(parents=True, exist_ok=True)
+                with gzip.open(gz_local_path, 'rb') as f_in, open(decompressed, 'wb') as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+                self._is_temporary = False
+                return decompressed
+            else:
+                decompressed = self._fm.create_temp_file('.ungz')
+                with gzip.open(gz_local_path, 'rb') as f_in, open(decompressed, 'wb') as f_out:
+                    shutil.copyfileobj(f_in, f_out)
+                self._is_temporary = True
+                return decompressed
 
         def __enter__(self) -> IO:
             data_path = self._ensure_local()
@@ -276,10 +317,12 @@ class StorageManager:
             temp_path: Path,
             dest_path: Path,
             blocking: bool = True,
-            callback: Optional[S3JobCallback] = None
+            callback: Optional[S3JobCallback] = None,
+            compress: bool = False,
     ) -> None:
         """
         Finalize artifact by moving it from temp to final location, optionally upload it to the cloud.
+        If compress=True, gzip the file before saving. The dest_path gets .gz appended.
         If call is non-blocking, not guaranteed that will succeed, cloud error will be reported in logs
         :return:
         """
@@ -288,6 +331,14 @@ class StorageManager:
         if not self.save_local_enabled() and not self.save_cloud_enabled():
             raise StorageManagerError('Writting is not save, because data will be lost;'
                                       'Because of save_local = False and s3 cloud is turned off')
+
+        if compress:
+            gz_temp = temp_path.with_name(temp_path.name + '.gz')
+            with open(temp_path, 'rb') as f_in, gzip.open(gz_temp, 'wb', compresslevel=6) as f_out:
+                shutil.copyfileobj(f_in, f_out)
+            temp_path.unlink()
+            temp_path = gz_temp
+            dest_path = Path(str(dest_path) + '.gz')
 
         relative_path = ensure_relative(dest_path, self._file_manager.local_cfg.base_path, label='collecting data path')
 

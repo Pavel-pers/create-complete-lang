@@ -90,7 +90,7 @@ def run_pipeline(
         )
 
         # --- Register build in DB ---
-        build_id = doc_store.insert_embedding_build(
+        build_id = doc_store.insert_svd_embedding_build(
             svd_id=svd_build_id,
             sigma_power=sigma_power,
             reshape_k=reshape_k,
@@ -157,7 +157,7 @@ def run_pipeline(
             raise
 
         # --- Update DB ---
-        doc_store.update_embedding_build(
+        doc_store.update_svd_embedding_build(
             build_id,
             status=ProcessingStatus.OK,
             path=str(output_base_path),
@@ -171,7 +171,7 @@ def run_pipeline(
     except Exception:
         if build_id is not None:
             try:
-                doc_store.update_embedding_build(build_id, status=ProcessingStatus.ERROR)
+                doc_store.update_svd_embedding_build(build_id, status=ProcessingStatus.ERROR)
             except Exception:
                 pass
         raise

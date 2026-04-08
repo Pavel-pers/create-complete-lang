@@ -84,13 +84,17 @@ class VocabInfo(BaseModel):
     updated_at: Optional[str] = None
 
 
-class CorpusInfo(BaseModel):
+class FragmentBuildInfo(BaseModel):
     run_id: int
     vocab_id: int
     fragment_size: int
     status: ProcessingStatus = Field(default=ProcessingStatus.OK)
     stats: Optional[Dict[str, Any]] = None
     updated_at: Optional[str] = None
+
+
+# Keep alias for backward compatibility
+CorpusInfo = FragmentBuildInfo
 
 
 class TdmInfo(BaseModel):
@@ -125,6 +129,31 @@ class EmbeddingsBuildInfo(BaseModel):
     status: ProcessingStatus = Field(default=ProcessingStatus.OK)
     updated_at: Optional[str] = None
 
+
+# ---------- Unified Artifact Builds ----------
+
+class ArtifactBuildInfo(BaseModel):
+    """Unified DB model for corpus_builds, embedding_builds, cluster_builds."""
+    run_id: int
+    path: str
+    version: str
+    status: ProcessingStatus = Field(default=ProcessingStatus.RUNNING)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ArtifactManifest(BaseModel):
+    """Manifest stored as manifest.json alongside the artifact directory."""
+    schema_version: str = Field(default="0.2.0")
+    artifact_type: str          # "corpus" | "embedding" | "cluster"
+    method: str                 # "stanza", "svd", "cbow", "wishart", "dbscan", ...
+    version: str
+    params: Dict[str, Any] = Field(default_factory=dict)
+    extra: Dict[str, Any] = Field(default_factory=dict)
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat() + 'Z')
+
+
+# ---------- SVD Pipeline Models ----------
 
 class SvdInputInfo(BaseModel):
     """Snapshot if input data"""

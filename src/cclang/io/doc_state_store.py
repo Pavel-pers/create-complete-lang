@@ -8,7 +8,8 @@ from typing import Any, List, Optional
 import psycopg
 
 from cclang.io.schemas import (
-    CorpusInfo,
+    ArtifactBuildInfo,
+    FragmentBuildInfo,
     LemmaResult,
     LemmatizeTask,
     OcrResult,
@@ -19,7 +20,8 @@ from cclang.io.schemas import (
     TokenizeTask,
     VocabInfo,
     VocabParams,
-    VocabStats, EmbeddingsBuildInfo,
+    VocabStats,
+    EmbeddingsBuildInfo,
 )
 
 
@@ -427,8 +429,8 @@ class DocStateStore:
                     ),
                 )
 
-    def get_corpus_build(self, run_id: int) -> CorpusInfo:
-        """Return a CorpusInfo for the given corpus_builds.run_id, or raise ValueError."""
+    def get_fragment_build(self, run_id: int) -> FragmentBuildInfo:
+        """Return a FragmentBuildInfo for the given fragment_builds.run_id, or raise ValueError."""
         with self._lock:
             conn = self._check_conn()
             with conn.cursor() as cur:
@@ -440,15 +442,15 @@ class DocStateStore:
                            status,
                            stats,
                            updated_at
-                    FROM corpus_builds
+                    FROM fragment_builds
                     WHERE run_id = %s
                     """,
                     (run_id,),
                 )
                 row = cur.fetchone()
                 if row is None:
-                    raise ValueError(f"corpus_builds run_id={run_id} not found")
-                return CorpusInfo(
+                    raise ValueError(f"fragment_builds run_id={run_id} not found")
+                return FragmentBuildInfo(
                     run_id=row[0],
                     vocab_id=row[1],
                     fragment_size=row[2],
@@ -502,21 +504,21 @@ class DocStateStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT path 
-                    FROM corpus_fragments 
+                    SELECT path
+                    FROM fragment_results
                     WHERE status = 'ok' AND build_id = %s
                     """, (build_id, ), )
                 rows = cur.fetchall()
                 return [row[0] for row in rows]
 
-    def insert_corpus_build(
+    def insert_fragment_build(
             self,
             vocab_id: int,
             fragment_size: int,
             status: ProcessingStatus,
             stats: dict[str, int] | None = None,
     ) -> int:
-        """Insert an corpus_builds record and return run_id."""
+        """Insert a fragment_builds record and return run_id."""
         import json
 
         with self._lock:
@@ -524,7 +526,7 @@ class DocStateStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO corpus_builds (vocab_id, fragment_size, stats, status, updated_at)
+                    INSERT INTO fragment_builds (vocab_id, fragment_size, stats, status, updated_at)
                     VALUES (%s, %s, %s::jsonb, %s, NOW())
                     RETURNING run_id
                     """,
@@ -541,13 +543,13 @@ class DocStateStore:
             conn.commit()
             return run_id
 
-    def update_corpus_build(
+    def update_fragment_build(
             self,
             build_id: int,
             status: ProcessingStatus,
             stats: dict[str, int] | None = None,
     ) -> None:
-        """Update status and stats for an corpus_builds record."""
+        """Update status and stats for a fragment_builds record."""
         import json
 
         with self._lock:
@@ -555,7 +557,7 @@ class DocStateStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    UPDATE corpus_builds
+                    UPDATE fragment_builds
                     SET status     = %s,
                         stats      = %s::jsonb,
                         updated_at = NOW()
@@ -741,9 +743,9 @@ class DocStateStore:
                     ),
                 )
 
-    # * embedding_builds
+    # * embedding_builds_old (SVD pipeline legacy)
 
-    def insert_embedding_build(
+    def insert_svd_embedding_build(
             self,
             svd_id: int,
             sigma_power: float,
@@ -753,7 +755,7 @@ class DocStateStore:
             path: str | None = None,
             stats: dict[str, Any] | None = None,
     ) -> int:
-        """Insert an embedding_builds record and return run_id."""
+        """Insert an embedding_builds_old record and return run_id."""
         import json
 
         with self._lock:
@@ -761,7 +763,7 @@ class DocStateStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO embedding_builds
+                    INSERT INTO embedding_builds_old
                         (svd_id, sigma_power, reshape_k, method, stats, path, status, updated_at)
                     VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, NOW())
                     RETURNING run_id
@@ -782,14 +784,14 @@ class DocStateStore:
             conn.commit()
             return run_id
 
-    def update_embedding_build(
+    def update_svd_embedding_build(
             self,
             build_id: int,
             status: ProcessingStatus,
             path: str | None = None,
             stats: dict[str, Any] | None = None,
     ) -> None:
-        """Update status, path, and stats for an embedding_builds record."""
+        """Update status, path, and stats for an embedding_builds_old record."""
         import json
 
         with self._lock:
@@ -797,7 +799,7 @@ class DocStateStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    UPDATE embedding_builds
+                    UPDATE embedding_builds_old
                     SET status     = %s,
                         path       = %s,
                         stats      = %s::jsonb,
@@ -813,7 +815,7 @@ class DocStateStore:
                 )
             conn.commit()
 
-    def get_embeddings_build(self, run_id: int) -> EmbeddingsBuildInfo:
+    def get_svd_embedding_build(self, run_id: int) -> EmbeddingsBuildInfo:
         with self._lock:
             conn = self._check_conn()
             with conn.cursor() as cur:
@@ -828,14 +830,14 @@ class DocStateStore:
                             path,
                             status,
                             updated_at
-                    FROM embedding_builds
+                    FROM embedding_builds_old
                     WHERE run_id = %s
                     """,
                     (run_id,),
                 )
                 row = cur.fetchone()
                 if row is None:
-                    raise ValueError(f"embedding_builds run_id={run_id} not found")
+                    raise ValueError(f"embedding_builds_old run_id={run_id} not found")
                 return EmbeddingsBuildInfo(
                     run_id=row[0],
                     svd_id=row[1],
@@ -844,18 +846,18 @@ class DocStateStore:
                     method=row[4],
                     stats=row[5],
                     path=row[6],
-                    status=ProcessingStatus(row[6]),
+                    status=ProcessingStatus(row[7]),
                     updated_at=(
-                        row[7].isoformat() if isinstance(row[7], datetime) else row[7]
-                    )
+                        row[8].isoformat() if isinstance(row[8], datetime) else row[8]
+                    ),
                 )
 
 
-    def batch_insert_corpus_fragments(
+    def batch_insert_fragment_results(
             self,
             rows: list[tuple[int, str, str | None, str, str | None]],
     ) -> None:
-        """Batch INSERT rows into corpus_fragments via executemany.
+        """Batch INSERT rows into fragment_results via executemany.
 
         Each row = (build_id, source_doc_id, artefact_id, status, path).
         """
@@ -864,13 +866,187 @@ class DocStateStore:
             with conn.cursor() as cur:
                 cur.executemany(
                     """
-                    INSERT INTO corpus_fragments
+                    INSERT INTO fragment_results
                         (build_id, source_doc_id, artefact_id, status, path, updated_at)
                     VALUES (%s, %s, %s, %s, %s, NOW())
                     """,
                     rows,
                 )
             conn.commit()
+
+    # ────────────────────────────────────────────────────────
+    # Unified artifact builds (corpus, embedding, cluster)
+    # ────────────────────────────────────────────────────────
+
+    _ARTIFACT_TABLES = frozenset({"corpus_builds", "embedding_builds", "cluster_builds"})
+
+    def _register_build(
+            self, table: str, path: str, version: str,
+            status: ProcessingStatus = ProcessingStatus.RUNNING,
+    ) -> int:
+        assert table in self._ARTIFACT_TABLES
+        with self._lock:
+            conn = self._check_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO {table} (path, version, status, created_at, updated_at)
+                    VALUES (%s, %s, %s, NOW(), NOW())
+                    RETURNING run_id
+                    """,
+                    (path, version, status.value),
+                )
+                row = cur.fetchone()
+                assert row is not None
+                run_id: int = row[0]
+            conn.commit()
+            return run_id
+
+    def _complete_build(
+            self, table: str, run_id: int,
+            status: ProcessingStatus,
+    ) -> None:
+        assert table in self._ARTIFACT_TABLES
+        with self._lock:
+            conn = self._check_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {table}
+                    SET status = %s, updated_at = NOW()
+                    WHERE run_id = %s
+                    """,
+                    (status.value, run_id),
+                )
+            conn.commit()
+
+    def _get_build(self, table: str, run_id: int) -> ArtifactBuildInfo:
+        assert table in self._ARTIFACT_TABLES
+        with self._lock:
+            conn = self._check_conn()
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT run_id, path, version, status, created_at, updated_at
+                    FROM {table}
+                    WHERE run_id = %s
+                    """,
+                    (run_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    raise ValueError(f"{table} run_id={run_id} not found")
+                return ArtifactBuildInfo(
+                    run_id=row[0],
+                    path=row[1],
+                    version=row[2],
+                    status=ProcessingStatus(row[3]),
+                    created_at=(
+                        row[4].isoformat() if isinstance(row[4], datetime) else row[4]
+                    ),
+                    updated_at=(
+                        row[5].isoformat() if isinstance(row[5], datetime) else row[5]
+                    ),
+                )
+
+    def _list_builds(
+            self, table: str,
+            status: ProcessingStatus | None = None,
+    ) -> list[ArtifactBuildInfo]:
+        assert table in self._ARTIFACT_TABLES
+        with self._lock:
+            conn = self._check_conn()
+            with conn.cursor() as cur:
+                if status is not None:
+                    cur.execute(
+                        f"""
+                        SELECT run_id, path, version, status, created_at, updated_at
+                        FROM {table}
+                        WHERE status = %s
+                        ORDER BY run_id
+                        """,
+                        (status.value,),
+                    )
+                else:
+                    cur.execute(
+                        f"""
+                        SELECT run_id, path, version, status, created_at, updated_at
+                        FROM {table}
+                        ORDER BY run_id
+                        """
+                    )
+                results: list[ArtifactBuildInfo] = []
+                for row in cur.fetchall():
+                    results.append(ArtifactBuildInfo(
+                        run_id=row[0],
+                        path=row[1],
+                        version=row[2],
+                        status=ProcessingStatus(row[3]),
+                        created_at=(
+                            row[4].isoformat() if isinstance(row[4], datetime) else row[4]
+                        ),
+                        updated_at=(
+                            row[5].isoformat() if isinstance(row[5], datetime) else row[5]
+                        ),
+                    ))
+                return results
+
+    # * corpus_builds (unified)
+
+    def register_corpus_build(
+            self, path: str, version: str,
+            status: ProcessingStatus = ProcessingStatus.RUNNING,
+    ) -> int:
+        return self._register_build("corpus_builds", path, version, status)
+
+    def complete_corpus_build(self, run_id: int, status: ProcessingStatus) -> None:
+        self._complete_build("corpus_builds", run_id, status)
+
+    def get_corpus_build(self, run_id: int) -> ArtifactBuildInfo:
+        return self._get_build("corpus_builds", run_id)
+
+    def list_corpus_builds(
+            self, status: ProcessingStatus | None = None,
+    ) -> list[ArtifactBuildInfo]:
+        return self._list_builds("corpus_builds", status)
+
+    # * embedding_builds (unified)
+
+    def register_embedding_build(
+            self, path: str, version: str,
+            status: ProcessingStatus = ProcessingStatus.RUNNING,
+    ) -> int:
+        return self._register_build("embedding_builds", path, version, status)
+
+    def complete_embedding_build(self, run_id: int, status: ProcessingStatus) -> None:
+        self._complete_build("embedding_builds", run_id, status)
+
+    def get_embedding_build(self, run_id: int) -> ArtifactBuildInfo:
+        return self._get_build("embedding_builds", run_id)
+
+    def list_embedding_builds(
+            self, status: ProcessingStatus | None = None,
+    ) -> list[ArtifactBuildInfo]:
+        return self._list_builds("embedding_builds", status)
+
+    # * cluster_builds (unified)
+
+    def register_cluster_build(
+            self, path: str, version: str,
+            status: ProcessingStatus = ProcessingStatus.RUNNING,
+    ) -> int:
+        return self._register_build("cluster_builds", path, version, status)
+
+    def complete_cluster_build(self, run_id: int, status: ProcessingStatus) -> None:
+        self._complete_build("cluster_builds", run_id, status)
+
+    def get_cluster_build(self, run_id: int) -> ArtifactBuildInfo:
+        return self._get_build("cluster_builds", run_id)
+
+    def list_cluster_builds(
+            self, status: ProcessingStatus | None = None,
+    ) -> list[ArtifactBuildInfo]:
+        return self._list_builds("cluster_builds", status)
 
     # lifecycle
 
