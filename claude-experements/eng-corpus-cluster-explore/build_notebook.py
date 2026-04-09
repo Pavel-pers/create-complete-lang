@@ -384,11 +384,13 @@ plt.show()
 """))
     cells.append(md(f"> *Plot {title[0]}2*: log-log rank-size — наклон ~-1 соответствует Zipf."))
 
-    # Plot: density histogram / ridge
-    cells.append(code(f"""# Plot: per-cluster density distribution (ridge-like using overlapping KDEs for top N clusters)
+    # Plot: intra-cluster distance-to-centroid distribution (KDE)
+    cells.append(code(f"""# Plot: per-cluster KDE of distances from each point to its cluster centroid
+# NOTE: field `densities` in labels.npz actually stores distance-to-own-centroid
+# (Euclidean on L2-normalized vectors). Not probability density.
 fig, ax = plt.subplots(figsize=(12, 6))
 
-# For large (18): all clusters; for medium/small: limit to top clusters for clarity
+# For large (18): all clusters; for medium/small: limit to top N for clarity
 max_show = min(20, n_clusters_{name})
 top_cids = np.argsort(-sizes_{name})[:max_show]
 cmap = plt.cm.tab20(np.linspace(0, 1, max_show))
@@ -398,16 +400,16 @@ for i, cid in enumerate(top_cids):
     sns.kdeplot(densities[mask], ax=ax, color=cmap[i], alpha=0.6, linewidth=1.5,
                 label=f"{{cid}} (n={{mask.sum()}})" if max_show <= 18 else None)
 
-ax.set_xlabel("Density (from labels.npz)")
-ax.set_ylabel("KDE")
-ax.set_title(f"{title}: per-cluster density distribution (top {{max_show}} clusters)")
+ax.set_xlabel("Distance to own cluster centroid (Euclidean, L2-normalized space)")
+ax.set_ylabel("KDE density")
+ax.set_title(f"{title}: intra-cluster distance-to-centroid distribution (top {{max_show}} clusters)", fontsize=12)
 if max_show <= 18:
-    ax.legend(ncol=3, fontsize=8, loc="upper right")
+    ax.legend(ncol=3, fontsize=8, loc="upper right", title="cluster (n)")
 plt.tight_layout()
-plt.savefig(FIG_DIR / "{name}_03_density_kde.png")
+plt.savefig(FIG_DIR / "{name}_03_intra_dist_kde.png")
 plt.show()
 """))
-    cells.append(md(f"> *Plot {title[0]}3*: распределение плотностей (из labels.npz) для крупнейших кластеров."))
+    cells.append(md(f"> *Plot {title[0]}3*: KDE расстояний от каждой точки до **её собственного центроида**. Узкий пик слева = компактный кластер; широкий/смещённый вправо = рыхлый."))
 
     # Plot: intra-cluster distance boxplot
     cells.append(code(f"""# Plot: boxplot of intra-cluster distance to centroid
@@ -686,20 +688,21 @@ plt.show()
 """))
     cells.append(md(f"> *Plot {title[0]}11*: UMAP-проекция с цветовой кодировкой кластеров и центроидами."))
 
-    cells.append(code(f"""# UMAP colored by per-point density (from labels.npz)
+    cells.append(code(f"""# UMAP colored by per-point distance-to-own-centroid
+# (field `densities` in labels.npz = Euclidean distance to own cluster centroid)
 fig, ax = plt.subplots(figsize=(12, 10))
 sc = ax.scatter(umap_coords[:, 0], umap_coords[:, 1],
-                c=densities, s=2, alpha=0.4, cmap="magma", linewidth=0)
+                c=densities, s=2, alpha=0.4, cmap="magma_r", linewidth=0)
 cb = plt.colorbar(sc, ax=ax)
-cb.set_label("Density (per-point)")
+cb.set_label("Distance to own cluster centroid")
 ax.set_xlabel("UMAP 1")
 ax.set_ylabel("UMAP 2")
-ax.set_title(f"{title}: UMAP colored by density")
+ax.set_title(f"{title}: UMAP coloured by distance to own cluster centroid", fontsize=13)
 plt.tight_layout()
-plt.savefig(FIG_DIR / "{name}_12_umap_density.png")
+plt.savefig(FIG_DIR / "{name}_12_umap_dist_to_centroid.png")
 plt.show()
 """))
-    cells.append(md(f"> *Plot {title[0]}12*: UMAP, раскраска по плотности — где лежат «плотные» точки."))
+    cells.append(md(f"> *Plot {title[0]}12*: UMAP, раскраска по расстоянию **до собственного центроида кластера**. Тёмные точки = близко к центру своего кластера (ядро); светлые = на периферии, далеко от центра. Помогает увидеть «размытые» или «плотные» кластеры в пространстве."))
 
 
 def add_cross_level_section(cells):

@@ -98,7 +98,7 @@ eng-corpus-cluster-explore/
 figures/
 ├── large_01_sizes_sorted.png         # распределение размеров
 ├── large_02_rank_size_loglog.png     # rank-size закон
-├── large_03_density_kde.png          # per-cluster density distribution
+├── large_03_intra_dist_kde.png          # per-cluster density distribution
 ├── large_04_intra_dist_boxplot.png   # компактность
 ├── large_05_silhouette_plot.png      # классический silhouette
 ├── large_06_silhouette_per_cluster.png
@@ -107,7 +107,7 @@ figures/
 ├── large_09_dendrogram.png           # иерархия центроидов
 ├── large_10_network.png              # графy близости
 ├── large_11_umap_clusters.png        # 2D проекция
-├── large_12_umap_density.png         # density overlay
+├── large_12_umap_dist_to_centroid.png         # density overlay
 ├── medium_01..12_*.png               # аналогично для Medium
 ├── small_01..12_*.png                # аналогично для Small
 ├── cross_01_flow_LM.png              # Large→Medium heatmap
@@ -132,7 +132,7 @@ figures/
 ### Оговорки
 
 1. **Roles** (поле из `labels.npz`) все нули для Bisecting K-Means — не используется.
-2. **Densities** (также из `labels.npz`) — это расстояния до центроида внутри кластера, отражают внутреннюю структуру K-Means и показываются в KDE (plot 03) и UMAP-оверлее (plot 12).
+2. **Densities field** в `labels.npz` — название досталось от density-based формата Wishart, но для Bisecting K-Means здесь хранится **евклидово расстояние каждой точки до её собственного центроида** (`np.linalg.norm(vectors - centroids[labels], axis=1)`). Это НЕ вероятностная плотность. Используется в plot 03 (KDE распределений по кластерам) и plot 12 (UMAP coloring). Графики и подписи обновлены в v3 чтобы убрать двусмысленность.
 3. **Silhouette negative ≠ bad clustering** на словарных эмбеддингах: семантические кластеры перекрываются по границам, но лингвистически остаются разделимыми (см. `claude-clustering-review.md` предыдущей задачи).
 
 ## Воспроизведение

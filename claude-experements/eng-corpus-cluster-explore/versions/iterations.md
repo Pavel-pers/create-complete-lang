@@ -17,6 +17,13 @@ After reading exported PNGs:
 6. **S8 (small centroid heatmap)**: нет title/xlabel/ylabel (хотя cbar есть)
 7. **X8 (metrics comparison bars)**: CH-log доминирует по высоте, остальные метрики неразличимы
 
+## v3 — Terminology fix
+- Plot 03 и Plot 12 переименованы с "density" на "distance to centroid" — избежать путаницы.
+- `{level}_03_density_kde.png` → `{level}_03_intra_dist_kde.png`
+- `{level}_12_umap_density.png` → `{level}_12_umap_dist_to_centroid.png`
+- Подписи осей: "Distance to own cluster centroid (Euclidean, L2-normalized space)"
+- Поле `densities` в labels.npz — это distance-to-own-centroid (не вероятностная плотность), название наследуется от Wishart-формата.
+
 ## v2 — Fixes
 - UMAP centroid annotations: убрать bbox, использовать круглые маркеры с цифрами внутри через plt.text с bold font
 - Small/Medium UMAP: только 10 крупнейших подписать, остальные просто маркеры без подписи
