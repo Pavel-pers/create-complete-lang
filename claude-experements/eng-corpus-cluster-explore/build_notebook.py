@@ -1,19 +1,53 @@
 #!/usr/bin/env python3
 """
-Generator for cluster_explore.ipynb.
+Generator for cluster_explore notebooks.
 
 Run from claude-experements/eng-corpus-cluster-explore/:
-    python build_notebook.py
+    python build_notebook.py --phase 1   # SVD-LSA Phase 1 (v4-nopc1)
+    python build_notebook.py --phase 2   # CBOW Phase 2 (v8-cbow50-nopc1)
+
+Two notebooks are generated independently with separate figures/cache
+subdirectories so they can coexist.
 """
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import nbformat as nbf
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
 HERE = Path(__file__).resolve().parent
-OUT = HERE / "cluster_explore.ipynb"
+
+# Phase-specific config
+PHASES = {
+    1: {
+        "embeddings_version": "v4-nopc1",
+        "embeddings_desc": "79,485 × **300**, L2-normalized SVD-LSA (log-entropy, k=300) с удалённым PC1",
+        "embeddings_method": "SVD-LSA",
+        "cluster_large": "c11-large",
+        "cluster_medium": "c11-medium",
+        "cluster_small": "c17-small",
+        "small_n": 517,
+        "notebook_name": "cluster_explore_phase1.ipynb",
+        "fig_subdir": "phase1",
+        "cache_subdir": "phase1",
+        "title_suffix": "Phase 1 — SVD-LSA dim=300",
+    },
+    2: {
+        "embeddings_version": "v8-cbow50-nopc1",
+        "embeddings_desc": "79,485 × **50**, L2-normalized Word2Vec CBOW (vector_size=50, window=5, epochs=10) с удалённым PC1",
+        "embeddings_method": "Word2Vec CBOW",
+        "cluster_large": "c_p2_v8pc1-large",
+        "cluster_medium": "c_p2_v8pc1-medium",
+        "cluster_small": "c_p2_v8pc1-small",
+        "small_n": 538,
+        "notebook_name": "cluster_explore_phase2.ipynb",
+        "fig_subdir": "phase2",
+        "cache_subdir": "phase2",
+        "title_suffix": "Phase 2 — CBOW dim=50 (RECOMMENDED)",
+    },
+}
 
 
 def md(text: str):
@@ -24,27 +58,30 @@ def code(text: str):
     return new_code_cell(text)
 
 
-def build() -> nbf.NotebookNode:
+def build(phase: int) -> nbf.NotebookNode:
+    cfg = PHASES[phase]
     cells = []
 
     # ═══════════════════════════════════════════════════════════
     # Header
     # ═══════════════════════════════════════════════════════════
-    cells.append(md("""# Cluster Exploration — English NewLit
+    cells.append(md(f"""# Cluster Exploration — English NewLit ({cfg['title_suffix']})
 
 Визуализация и статистики финальных кластеров из задачи `eng-corpus-wishart`.
 
 **Входные данные:**
-- Embeddings: `v4-nopc1` — 79,485 × 300, L2-normalized SVD-LSA с удалённым PC1
-- Large: `c11-large` — 18 кластеров (Bisecting K-Means)
-- Medium: `c11-medium` — 100 кластеров
-- Small: `c17-small` — 517 кластеров
+- Embeddings: `{cfg['embeddings_version']}` — {cfg['embeddings_desc']}
+- Large: `{cfg['cluster_large']}` — 18 кластеров (Bisecting K-Means)
+- Medium: `{cfg['cluster_medium']}` — 100 кластеров
+- Small: `{cfg['cluster_small']}` — {cfg['small_n']} кластеров
+
+**Phase 1 vs Phase 2**: оба ноутбука имеют одинаковую структуру и позволяют прямое визуальное сравнение. Phase 2 (CBOW dim=50) даёт в 1.5–2× лучшую равномерность кластеров и более чистую семантику. Figures и cache разделены по `figures/{cfg['fig_subdir']}/` и `cache/{cfg['cache_subdir']}/`.
 
 **Структура ноутбука:**
 1. Setup
 2. Large (18) — статистики + визуализация
 3. Medium (100)
-4. Small (517) — подмножество Top-20 + Random-20
+4. Small ({cfg['small_n']}) — подмножество Top-20 + Random-20
 5. Cross-level hierarchy — связи между уровнями
 6. Summary
 
@@ -88,15 +125,18 @@ import helpers as H
 print("Setup OK")
 """))
 
-    cells.append(code("""# Paths and constants
+    cells.append(code(f"""# Paths and constants
+PHASE = {phase}
+EMBEDDINGS_VERSION = "{cfg['embeddings_version']}"
+
 EXP_DIR = Path(".").resolve()
 WISHART_DIR = EXP_DIR.parent / "eng-corpus-wishart"
-EMB_DIR = WISHART_DIR / "data" / "embeddings" / "v4-nopc1"
+EMB_DIR = WISHART_DIR / "data" / "embeddings" / EMBEDDINGS_VERSION
 CLUSTERS_DIR = WISHART_DIR / "data" / "clusters"
-CACHE_DIR = EXP_DIR / "cache"
-FIG_DIR = EXP_DIR / "figures"
-CACHE_DIR.mkdir(exist_ok=True)
-FIG_DIR.mkdir(exist_ok=True)
+CACHE_DIR = EXP_DIR / "cache" / "{cfg['cache_subdir']}"
+FIG_DIR = EXP_DIR / "figures" / "{cfg['fig_subdir']}"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+FIG_DIR.mkdir(parents=True, exist_ok=True)
 
 TOP_N = 20
 RANDOM_N = 20
@@ -106,8 +146,11 @@ SILHOUETTE_SAMPLE_SMALL = 15_000
 RNG_SEED = 42
 rng = np.random.default_rng(RNG_SEED)
 
-print(f"EMB_DIR: {EMB_DIR}")
-print(f"CLUSTERS_DIR: {CLUSTERS_DIR}")
+print(f"Phase: {{PHASE}}")
+print(f"EMB_DIR: {{EMB_DIR}}")
+print(f"CLUSTERS_DIR: {{CLUSTERS_DIR}}")
+print(f"FIG_DIR: {{FIG_DIR}}")
+print(f"CACHE_DIR: {{CACHE_DIR}}")
 """))
 
     cells.append(code("""# Load embeddings
@@ -119,18 +162,18 @@ print(f"Norms: min={np.linalg.norm(vectors, axis=1).min():.4f}, "
       f"max={np.linalg.norm(vectors, axis=1).max():.4f} (should be ~1)")
 """))
 
-    cells.append(code("""# Load all three cluster levels
-LEVELS = {
-    "large": H.load_level(CLUSTERS_DIR, "c11-large"),
-    "medium": H.load_level(CLUSTERS_DIR, "c11-medium"),
-    "small": H.load_level(CLUSTERS_DIR, "c17-small"),
-}
+    cells.append(code(f"""# Load all three cluster levels
+LEVELS = {{
+    "large": H.load_level(CLUSTERS_DIR, "{cfg['cluster_large']}"),
+    "medium": H.load_level(CLUSTERS_DIR, "{cfg['cluster_medium']}"),
+    "small": H.load_level(CLUSTERS_DIR, "{cfg['cluster_small']}"),
+}}
 
 for name, lvl in LEVELS.items():
     sizes = np.bincount(lvl["labels"][lvl["labels"] >= 0])
-    print(f"{name:7s}: {lvl['n_clusters']:3d} clusters, "
-          f"sizes [{sizes.min()}-{sizes.max()}], "
-          f"mean={sizes.mean():.0f}")
+    print(f"{{name:7s}}: {{lvl['n_clusters']:3d}} clusters, "
+          f"sizes [{{sizes.min()}}-{{sizes.max()}}], "
+          f"mean={{sizes.mean():.0f}}")
 """))
 
     cells.append(code("""# Compute centroids for each level (used throughout the notebook)
@@ -1072,13 +1115,12 @@ plt.show()
     cells.append(md("> *Plot X8*: многомерное сравнение метрик качества между уровнями."))
 
 
-def main():
-    nb = build()
-    # Initialize QUALITY dict in a separate cell (inserted early in notebook)
-    # We need QUALITY to exist before level sections use it
+def build_and_save(phase: int) -> Path:
+    cfg = PHASES[phase]
+    nb = build(phase)
+
+    # Initialize QUALITY dict in a separate cell right before level 1
     init_cell = new_code_cell("QUALITY = {}")
-    # Insert after UMAP cell (position ~10 cells in)
-    # Find the position right before "## 1. Large"
     insert_pos = None
     for i, c in enumerate(nb["cells"]):
         if c.cell_type == "markdown" and "## 1." in c.source:
@@ -1087,10 +1129,23 @@ def main():
     if insert_pos is not None:
         nb["cells"].insert(insert_pos, init_cell)
 
-    with open(OUT, "w") as f:
+    out = HERE / cfg["notebook_name"]
+    with open(out, "w") as f:
         nbf.write(nb, f)
-    print(f"Notebook written: {OUT}")
-    print(f"Total cells: {len(nb['cells'])}")
+    print(f"Phase {phase} notebook written: {out}")
+    print(f"  Total cells: {len(nb['cells'])}")
+    return out
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--phase", type=int, choices=[1, 2], default=None,
+                        help="Build notebook for Phase 1 or 2. If omitted, build both.")
+    args = parser.parse_args()
+
+    phases_to_build = [args.phase] if args.phase else [1, 2]
+    for p in phases_to_build:
+        build_and_save(p)
 
 
 if __name__ == "__main__":

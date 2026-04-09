@@ -2,15 +2,21 @@
 
 ## Обзор задачи
 
-Построить Jupyter notebook с визуализациями и статистиками трёх финальных уровней кластеризации английского корпуса, полученных в задаче `eng-corpus-wishart`:
+Построить Jupyter notebook с визуализациями и статистиками трёх финальных уровней кластеризации английского корпуса.
 
-| Уровень | Артефакт | Метод | Кластеры |
-|---------|----------|-------|----------|
-| Large | `c11-large` | Bisecting K-Means | 18 |
-| Medium | `c11-medium` | Bisecting K-Means | 100 |
-| Small | `c17-small` | Bisecting K-Means | 517 |
+**Две параллельные версии** ноутбука для прямого визуального сравнения:
 
-**Эмбеддинги**: `v4-nopc1` — 79,485 × 300, L2-normalized SVD-LSA с удалённым первым главным компонентом.
+**Phase 1** — `cluster_explore_phase1.ipynb`:
+- Embeddings: `v4-nopc1` — 79,485 × **300**, SVD-LSA log-entropy + PC1 removal
+- Clusters: `c11-large` (18), `c11-medium` (100), `c17-small` (517)
+- Output: `figures/phase1/`, `cache/phase1/`
+
+**Phase 2** — `cluster_explore_phase2.ipynb` ⭐ recommended:
+- Embeddings: `v8-cbow50-nopc1` — 79,485 × **50**, Word2Vec CBOW + PC1 removal
+- Clusters: `c_p2_v8pc1-large` (18), `c_p2_v8pc1-medium` (100), `c_p2_v8pc1-small` (538)
+- Output: `figures/phase2/`, `cache/phase2/`
+
+Phase 2 даёт 1.5–2× лучшую равномерность и 6× меньшую размерность при лучшей лингвистической связности.
 
 ## Архитектура
 

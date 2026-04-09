@@ -25,7 +25,8 @@ def upload_all():
 
     # Top-level files
     for name in [
-        "cluster_explore.ipynb",
+        "cluster_explore_phase1.ipynb",
+        "cluster_explore_phase2.ipynb",
         "helpers.py",
         "build_notebook.py",
         "claude-report.md",
@@ -35,22 +36,23 @@ def upload_all():
     ]:
         p = HERE / name
         if p.exists():
-            rel = name
-            upload_list.append((p, f"{root_prefix}/{S3_PREFIX}/{rel}"))
+            upload_list.append((p, f"{root_prefix}/{S3_PREFIX}/{name}"))
 
-    # All figures
+    # Figures (walk subdirectories: phase1/, phase2/)
     fig_dir = HERE / "figures"
     if fig_dir.exists():
-        for f in fig_dir.iterdir():
+        for f in fig_dir.rglob("*"):
             if f.is_file():
-                upload_list.append((f, f"{root_prefix}/{S3_PREFIX}/figures/{f.name}"))
+                rel = f.relative_to(HERE)
+                upload_list.append((f, f"{root_prefix}/{S3_PREFIX}/{rel.as_posix()}"))
 
-    # Cache
+    # Cache (walk subdirectories: phase1/, phase2/)
     cache_dir = HERE / "cache"
     if cache_dir.exists():
-        for f in cache_dir.iterdir():
+        for f in cache_dir.rglob("*"):
             if f.is_file():
-                upload_list.append((f, f"{root_prefix}/{S3_PREFIX}/cache/{f.name}"))
+                rel = f.relative_to(HERE)
+                upload_list.append((f, f"{root_prefix}/{S3_PREFIX}/{rel.as_posix()}"))
 
     print(f"Uploading {len(upload_list)} files to s3://{bucket}/{root_prefix}/{S3_PREFIX}/")
     total = 0
