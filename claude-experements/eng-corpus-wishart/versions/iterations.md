@@ -54,7 +54,110 @@
 - Bisecting on v4-nopc1, target=800, min_cluster_size=95
 - **517 clusters**, [95—347], CV=0.31, ratio=3.65. PASS ✓
 
-## Final best results
+## Phase 2 — Дополнительные эксперименты (dim=50, CBOW, CBOW→SVD)
+
+### План
+
+Цели:
+1. Проверить, можно ли достичь сопоставимого (или лучшего) качества кластеризации с эмбеддингами **~50 измерений** (вместо 300)
+2. Попробовать **CBOW (Word2Vec)** как альтернативу SVD-LSA
+3. Попробовать гибрид **CBOW → SVD** — обучить CBOW в высокой размерности, затем снизить через SVD
+
+Все эксперименты на том же словаре (min_tf=5, min_df=3) → 79,485 слов.
+
+### Версии эмбеддингов
+
+| Version | Метод | Size | Постобработка |
+|---------|-------|------|---------------|
+| v4-nopc1 | SVD-LSA log-entropy k=300 | 300 | center + PC1 removal + L2 | **baseline** |
+| **v7-svd50** | SVD-LSA log-entropy k=50 | 50 | center + L2 |
+| **v7-svd50-nopc1** | SVD-LSA log-entropy k=50 | 50 | center + PC1 removal + L2 |
+| **v8-cbow50** | Word2Vec CBOW vector_size=50 | 50 | center + L2 |
+| **v8-cbow50-nopc1** | Word2Vec CBOW vector_size=50 | 50 | center + PC1 removal + L2 |
+| **v9-cbow300** | Word2Vec CBOW vector_size=300 | 300 | center + L2 |
+| **v9-cbow300-svd50** | v9-cbow300 → SVD → 50 | 50 | center + L2 |
+| **v9-cbow300-svd50-nopc1** | v9-cbow300 → SVD → 50 | 50 | center + PC1 removal + L2 |
+
+### Стратегия
+
+1. Построить все версии эмбеддингов
+2. Прогнать Bisecting K-Means 3-уровневую кластеризацию (target=18/100/600) на каждой
+3. Сравнить метрики: CV, max/min, silhouette, DB, CH, Dunn
+4. Для топ-кандидатов — лингвистическая валидация
+5. Обновить отчёт с выводами
+
+## Phase 2 — Результаты
+
+### Построенные эмбеддинги
+- **v7-svd50**: SVD-LSA log-entropy k=50 (sigma_power=0.5, center+L2)
+- **v7-svd50-nopc1**: + удаление PC1
+- **v8-cbow50**: Word2Vec CBOW vector_size=50, window=5, epochs=10
+- **v8-cbow50-nopc1**: + удаление PC1
+- **v9-cbow300**: Word2Vec CBOW vector_size=300
+- **v9-cbow300-svd50**: v9-cbow300 → randomized_svd k=50 (center + L2)
+- **v9-cbow300-svd50-nopc1**: + удаление PC1
+
+### Сравнение метрик Bisecting K-Means на всех версиях
+
+| Version | Dim | L CV | L ratio | M CV | M ratio | S CV | S ratio |
+|---------|-----|------|---------|------|---------|------|---------|
+| v4-nopc1 (baseline Phase 1) | 300 | 0.491 | 7.01 | 0.324 | 5.57 | 0.307 | 3.65 |
+| v7-svd50 | 50 | 0.428 | 3.83 | 0.399 | 6.03 | 0.348 | 4.31 |
+| v7-svd50-nopc1 | 50 | 0.356 | 5.18 | 0.252 | 4.51 | 0.266 | 3.48 |
+| v8-cbow50 | 50 | 0.265 | 2.48 | **0.225** | **2.62** | 0.267 | 3.92 |
+| **v8-cbow50-nopc1** ★ | 50 | 0.271 | 2.53 | 0.226 | 2.93 | **0.240** | **3.06** |
+| v9-cbow300 | 300 | 0.260 | 2.77 | 0.248 | 9.15 | 0.284 | 3.61 |
+| v9-cbow300-svd50 | 50 | **0.191** | **1.99** | 0.271 | 7.47 | 0.262 | 3.04 |
+| v9-cbow300-svd50-nopc1 | 50 | 0.233 | 2.28 | 0.240 | 4.07 | 0.273 | 3.63 |
+
+### Ключевые выводы Phase 2
+
+1. **CBOW существенно превосходит SVD-LSA** по равномерности кластеров — CV упал с 0.3-0.5 до 0.22-0.27.
+2. **50-мерные эмбеддинги работают лучше 300-мерных** для задачи кластеризации (меньше шума, лучшая геометрия).
+3. **PC1 removal критичен для SVD-LSA**, но **менее важен для CBOW** — CBOW естественно распределяет дисперсию более равномерно (σ₁/σ₂ ≈ 1.3 против ≈2.4 у SVD-LSA).
+4. **CBOW→SVD гибрид** даёт лучшую формальную равномерность (CV=0.191, ratio=1.99 на Large), но **ухудшает семантику** — кластеры становятся тематически размытыми (смесь диалектов, имён, чисел).
+5. **v8-cbow50-nopc1** — лучшее решение по совокупности: отличная равномерность И лучшая лингвистическая связность.
+
+### Лингвистическая валидация v8-cbow50-nopc1
+
+**Large (18 кластеров)**:
+- C8: материалы/фактура (silvered, crinkled, ribbed, shiny)
+- C4: география (sandhill, pyrenee, bay, falls, foreshore)
+- C12: психология (defensiveness, passivity, unawareness)
+- C13: западный диалект (sassy, danged, doggone, pardner)
+- C10: персонажи романов (marchmont, newman, vanbrugh)
+- C9: ботаника/наука (spheroidal, laminar, hirsuta, nucleolus)
+- C2: несправедливость (unjust, misrepresentation, forgive)
+- C7: шотландский (naither, yoong, mayna, neebour)
+- C3: еда (doughnut, sardine, pork, crock)
+- C11: юриспруденция (trustee, solicitor, authorize)
+- C0: средневерхне-архаика (messire, hath, erst, thee)
+- C15: елизаветинский (thinke, onely, keepe, euill)
+- C17: феодальная знать (baron, emperor, valentinian)
+- C14: французский (ceux, demande, quant, heureux)
+- C16: военные топонимы (ptolemais, carnarvon, stockaded)
+
+Все 18 кластеров тематически связны, явных "свалок" нет.
+
+**Small (538 кластеров)** — примеры:
+- Arthurian romance (yolande, lancelot, beauteous, tressed, goddess)
+- Деревья (acacia, rhododendron, mimosa, ilex, sycamore)
+- Химия (nitrite, amyl, hydrochloric, alcohol)
+- Политика США (nominate, legislature, congress, elect)
+- Удивление (awestruck, transfixed, wonderingly, fascinated)
+- Еда/завтрак (oatmeal, tapioca, marmalade, cake)
+- Французский, шотландский — отдельные тугие кластеры
+
+### Рекомендованная финальная версия
+
+**v8-cbow50-nopc1** с Bisecting K-Means:
+- `c_p2_v8pc1-large` — 18 кластеров, CV=0.271
+- `c_p2_v8pc1-medium` — 100 кластеров, CV=0.226
+- `c_p2_v8pc1-small` — 538 кластеров, CV=0.240
+
+Превосходит Phase 1 baseline по всем метрикам **И** по лингвистической валидации.
+
+## Final best results (Phase 1)
 
 | Level | Version | Embeddings | Method | Clusters | Min | Max | CV | Ratio |
 |-------|---------|------------|--------|----------|-----|-----|----|-------|
